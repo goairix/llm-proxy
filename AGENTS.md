@@ -9,7 +9,7 @@
 - Module：`github.com/goairix/llm-proxy`
 - Go：1.25（Docker 构建镜像当前为 Go 1.25.4）
 - HTTP：标准库 `net/http`、`httputil.ReverseProxy`
-- 配置：Viper + `config.yaml`
+- 配置：Viper + `config.yaml` + godotenv
 - 日志：Zap + `file-rotatelogs`
 - 限流：`golang.org/x/time/rate`
 - 前端：单个内嵌 HTML 文件，无独立构建步骤
@@ -29,7 +29,7 @@ go test ./internal/middleware/ -run TestLoggingMiddlewareErrorLevels
 # 涉及 sync.Map、atomic 或并发逻辑时
 go test -race ./...
 
-# 构建与运行；运行时从当前目录读取 config.yaml
+# 构建与运行；运行时从当前目录读取 config.yaml 和可选的 .env
 go build -o /tmp/llm-proxy ./cmd/proxy
 go run ./cmd/proxy
 
@@ -57,14 +57,15 @@ docker build -t llm-proxy .
 ## 目录职责
 
 - `cmd/proxy/main.go`：加载 `config.yaml`、初始化日志与服务器、监听信号并优雅退出。
-- `internal/config`：配置结构、默认值和 YAML 加载；配置文件缺失时使用默认值，文件存在但无效时启动失败。
+- `internal/config`：配置结构、默认值、YAML、`.env` 和进程环境变量加载；配置文件缺失时使用默认值，文件存在但无效时启动失败。
 - `internal/server`：路由和中间件组装、Dashboard 统计、HTTP 服务器生命周期；版本号定义在这里。
 - `internal/proxy`：创建两个反向代理，修改目标地址、Host、Path 和 RawPath。
 - `internal/middleware`：访问日志、API Key 提取、令牌桶限流。
 - `internal/dashboard`：原子统计、Dashboard 数据注入和页面响应。
 - `internal/dashboard/web/index.html`：Dashboard 源文件，通过 `go:embed` 编入二进制。
 - `internal/logger`：控制台日志和按天轮转的 JSON 文件日志。
-- `config.yaml`：带注释的运行配置示例，也是本地直接运行时读取的默认路径。
+- `config.yaml`：带注释的 YAML 运行配置示例，也是本地直接运行时读取的默认路径。
+- `.env.example`：全部 `LLM_PROXY_` 环境变量的非敏感示例；实际 `.env` 不入库。
 
 ## 关键实现约束
 
@@ -98,7 +99,9 @@ docker build -t llm-proxy .
 
 ### 配置与生命周期
 
-- 新增配置字段时同步修改配置结构、Viper 默认值、`config.yaml` 示例和配置测试；若 Dashboard 展示该字段，也要更新其注入结构和页面。
+- 配置优先级为进程环境变量 > `.env` > `config.yaml` > 默认值；环境变量使用 `LLM_PROXY_` 前缀。
+- 列表和映射环境变量使用 JSON，非法的数字、布尔值或 JSON 必须导致启动失败。
+- 新增配置字段时同步修改配置结构、Viper 默认值、`internal/config/env.go`、`config.yaml`、`.env.example` 和配置测试；若 Dashboard 展示该字段，也要更新其注入结构和页面。
 - 配置不会热更新，修改后需要重启进程。
 - `main` 提供 30 秒外层退出期限，`Server.Shutdown` 再限制为 10 秒。更改退出流程时要保留 SIGINT/SIGTERM 的优雅关闭。
 
@@ -106,7 +109,7 @@ docker build -t llm-proxy .
 
 | 改动类型 | 通常需要检查的文件 |
 | --- | --- |
-| 新增或修改配置 | `internal/config/config.go`、`config_test.go`、`config.yaml`，必要时 README |
+| 新增或修改配置 | `internal/config/config.go`、`env.go`、`config_test.go`、`config.yaml`、`.env.example`，必要时 README |
 | 修改代理路径或上游行为 | `internal/proxy/*.go`、`proxy_test.go`、`internal/server/server.go` |
 | 修改限流 | `internal/middleware/ratelimit.go`、`ratelimit_test.go`、Dashboard 展示 |
 | 修改请求日志 | `internal/middleware/logging.go`、`logging_test.go`、`internal/logger` |

@@ -46,8 +46,8 @@ curl http://localhost:8080/anthropic/v1/messages \
 git clone https://github.com/goairix/llm-proxy.git
 cd llm-proxy
 
-# 复制并编辑配置文件
-cp config.yaml.example config.yaml
+# 可直接编辑 config.yaml，也可使用 .env
+cp .env.example .env
 
 go run ./cmd/proxy
 ```
@@ -68,7 +68,7 @@ docker run -d \
 
 ## 配置
 
-启动时从当前目录读取 `config.yaml`，缺失字段自动使用默认值。
+启动时从当前目录读取 `config.yaml` 和可选的 `.env`，缺失字段自动使用默认值。
 
 ```yaml
 server:
@@ -99,6 +99,25 @@ providers:
   anthropic:
     base_url: "https://api.anthropic.com"
 ```
+
+### 环境变量
+
+配置优先级为：进程环境变量 > `.env` > `config.yaml` > 默认值。
+
+```bash
+cp .env.example .env
+```
+
+变量名使用 `LLM_PROXY_` 前缀，并将配置层级转为大写下划线，例如 `server.port` 对应 `LLM_PROXY_SERVER_PORT`。完整列表见 `.env.example`。
+
+`LLM_PROXY_RATE_LIMIT_WHITELIST` 必须是 JSON 字符串数组，`LLM_PROXY_RATE_LIMIT_OVERRIDES` 必须是 JSON 对象：
+
+```dotenv
+LLM_PROXY_RATE_LIMIT_WHITELIST=["sk-a","sk-b"]
+LLM_PROXY_RATE_LIMIT_OVERRIDES={"sk-a":{"requests_per_second":100,"burst":200}}
+```
+
+无效的数字、布尔值或 JSON 会导致启动失败，错误信息会包含对应的环境变量名。
 
 ### 限流说明
 
@@ -167,6 +186,7 @@ llm-proxy/
 | `gopkg.in/natefinch/lumberjack.v2` | 日志文件轮转 |
 | `golang.org/x/time/rate` | Token Bucket 限流 |
 | `github.com/spf13/viper` | YAML 配置加载 |
+| `github.com/joho/godotenv` | `.env` 文件加载 |
 
 ## License
 
