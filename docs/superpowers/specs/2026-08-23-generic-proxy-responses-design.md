@@ -25,12 +25,12 @@ POST /openai/v1/responses -> 去掉 /openai -> 上游 POST /v1/responses
 `internal/proxy` 新增：
 
 ```go
-type Options struct {
+type options struct {
     BaseURL     string
     StripPrefix string
 }
 
-func NewReverseProxy(options Options) (http.Handler, error)
+func newReverseProxy(opts options) (http.Handler, error)
 ```
 
 它负责：
@@ -41,7 +41,7 @@ func NewReverseProxy(options Options) (http.Handler, error)
 - 让标准库保留查询参数、请求体、请求头、响应状态、响应头和流式响应；
 - 将请求 `Host` 设置为上游主机。
 
-`NewOpenAIProxy` 和 `NewAnthropicProxy` 保留为稳定的提供商入口，但只负责传入 `/openai`、`/anthropic` 两组参数，避免服务器层了解路径重写细节。
+`NewOpenAIProxy` 和 `NewAnthropicProxy` 保留为稳定的包外提供商入口；`newReverseProxy` 和 `options` 保持包内私有，只负责接收 `/openai`、`/anthropic` 两组参数，避免服务器层了解路径重写细节。
 
 ### 路径语义
 

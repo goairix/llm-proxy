@@ -4,7 +4,7 @@
 
 **Goal:** 抽取通用 HTTP 反向代理核心，并保证 OpenAI SDK 以 `/openai/v1` 为基地址时完整支持 Responses API 及 SSE。
 
-**Architecture:** `NewReverseProxy(Options)` 统一负责上游 URL 校验、前缀移除、目标基础路径拼接和 Host 重写；现有提供商构造函数变为薄封装。Responses API 不引入协议模型，通过 `httputil.ReverseProxy` 透明转发方法、查询、头、正文、状态和流。
+**Architecture:** 包内私有的 `newReverseProxy(options)` 统一负责上游 URL 校验、前缀移除、目标基础路径拼接和 Host 重写；现有提供商构造函数变为公开薄封装。Responses API 不引入协议模型，通过 `httputil.ReverseProxy` 透明转发方法、查询、头、正文、状态和流。
 
 **Tech Stack:** Go 1.25、`net/http`、`net/http/httputil`、`httptest`
 
@@ -25,15 +25,15 @@
 - Modify: `internal/proxy/proxy_test.go`
 
 **Interfaces:**
-- Produces: `type Options struct { BaseURL string; StripPrefix string }`
-- Produces: `func NewReverseProxy(options Options) (http.Handler, error)`
+- Produces: `type options struct { BaseURL string; StripPrefix string }`
+- Produces: `func newReverseProxy(opts options) (http.Handler, error)`
 
 - [x] **Step 1: 写入通用代理的失败测试**
 
 在 `internal/proxy/proxy_test.go` 增加表驱动 URL 校验测试，以及一个真实 `httptest.Server` 测试：上游地址含 `/gateway`、请求为 `/openai/v1/responses?include=usage` 时，上游收到 `/gateway/v1/responses?include=usage` 和上游 Host。
 
 ```go
-func TestNewReverseProxy_RewritesPathBeforeJoiningBasePath(t *testing.T) {
+func TestReverseProxy_RewritesPathBeforeJoiningBasePath(t *testing.T) {
     var gotPath, gotQuery, gotHost string
     upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
         gotPath, gotQuery, gotHost = r.URL.Path, r.URL.RawQuery, r.Host
@@ -41,12 +41,12 @@ func TestNewReverseProxy_RewritesPathBeforeJoiningBasePath(t *testing.T) {
     }))
     defer upstream.Close()
 
-    handler, err := NewReverseProxy(Options{
+    handler, err := newReverseProxy(options{
         BaseURL: upstream.URL + "/gateway",
         StripPrefix: "/openai",
     })
     if err != nil {
-        t.Fatalf("NewReverseProxy returned unexpected error: %v", err)
+        t.Fatalf("newReverseProxy returned unexpected error: %v", err)
     }
     proxyServer := httptest.NewServer(handler)
     defer proxyServer.Close()
@@ -66,22 +66,22 @@ func TestNewReverseProxy_RewritesPathBeforeJoiningBasePath(t *testing.T) {
 
 - [x] **Step 2: 运行测试并确认 RED**
 
-Run: `go test ./internal/proxy -run 'TestNewReverseProxy' -count=1`
+Run: `go test ./internal/proxy -run 'TestReverseProxy' -count=1`
 
-Expected: 编译失败，提示 `undefined: NewReverseProxy` 或 `undefined: Options`。
+Expected: 编译失败，提示 `undefined: newReverseProxy` 或 `undefined: options`。
 
 - [x] **Step 3: 实现最小通用代理**
 
 在 `internal/proxy/proxy.go` 实现 URL 校验与 Director：先移除 Path/RawPath 前缀，再调用默认 Director，最后设置 `req.Host`。
 
 ```go
-type Options struct {
+type options struct {
     BaseURL     string
     StripPrefix string
 }
 
-func NewReverseProxy(options Options) (http.Handler, error) {
-    target, err := url.Parse(options.BaseURL)
+func newReverseProxy(opts options) (http.Handler, error) {
+	 target, err := url.Parse(opts.BaseURL)
     if err != nil {
         return nil, fmt.Errorf("parse base URL: %w", err)
     }
@@ -95,9 +95,9 @@ func NewReverseProxy(options Options) (http.Handler, error) {
     reverseProxy := httputil.NewSingleHostReverseProxy(target)
     defaultDirector := reverseProxy.Director
     reverseProxy.Director = func(req *http.Request) {
-        req.URL.Path = strings.TrimPrefix(req.URL.Path, options.StripPrefix)
+        req.URL.Path = strings.TrimPrefix(req.URL.Path, opts.StripPrefix)
         if req.URL.RawPath != "" {
-            req.URL.RawPath = strings.TrimPrefix(req.URL.RawPath, options.StripPrefix)
+            req.URL.RawPath = strings.TrimPrefix(req.URL.RawPath, opts.StripPrefix)
         }
         defaultDirector(req)
         req.Host = target.Host
@@ -108,7 +108,7 @@ func NewReverseProxy(options Options) (http.Handler, error) {
 
 - [x] **Step 4: 运行通用代理测试并确认 GREEN**
 
-Run: `go test ./internal/proxy -run 'TestNewReverseProxy' -count=1`
+Run: `go test ./internal/proxy -run 'TestReverseProxy' -count=1`
 
 Expected: `ok github.com/goairix/llm-proxy/internal/proxy`。
 
@@ -120,7 +120,7 @@ Expected: `ok github.com/goairix/llm-proxy/internal/proxy`。
 - Modify: `internal/proxy/proxy_test.go`
 
 **Interfaces:**
-- Consumes: `NewReverseProxy(Options)`
+- Consumes: `newReverseProxy(options)`
 - Preserves: `NewOpenAIProxy(baseURL string) (http.Handler, error)`
 - Preserves: `NewAnthropicProxy(baseURL string) (http.Handler, error)`
 
@@ -138,11 +138,11 @@ Expected: 路径断言失败，实际值包含 `/gateway/openai/` 或 `/gateway/
 
 ```go
 func NewOpenAIProxy(baseURL string) (http.Handler, error) {
-    return NewReverseProxy(Options{BaseURL: baseURL, StripPrefix: "/openai"})
+    return newReverseProxy(options{BaseURL: baseURL, StripPrefix: "/openai"})
 }
 
 func NewAnthropicProxy(baseURL string) (http.Handler, error) {
-    return NewReverseProxy(Options{BaseURL: baseURL, StripPrefix: "/anthropic"})
+    return newReverseProxy(options{BaseURL: baseURL, StripPrefix: "/anthropic"})
 }
 ```
 

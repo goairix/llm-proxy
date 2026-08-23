@@ -8,16 +8,16 @@ import (
 	"strings"
 )
 
-// Options configures a reverse proxy.
-type Options struct {
+// options configures a reverse proxy.
+type options struct {
 	BaseURL     string
 	StripPrefix string
 }
 
-// NewReverseProxy creates a reverse proxy that removes a public route prefix
+// newReverseProxy creates a reverse proxy that removes a public route prefix
 // before joining the request path with the upstream base URL.
-func NewReverseProxy(options Options) (http.Handler, error) {
-	target, err := url.Parse(options.BaseURL)
+func newReverseProxy(opts options) (http.Handler, error) {
+	target, err := url.Parse(opts.BaseURL)
 	if err != nil {
 		return nil, fmt.Errorf("parse base URL: %w", err)
 	}
@@ -31,9 +31,9 @@ func NewReverseProxy(options Options) (http.Handler, error) {
 	reverseProxy := httputil.NewSingleHostReverseProxy(target)
 	defaultDirector := reverseProxy.Director
 	reverseProxy.Director = func(req *http.Request) {
-		req.URL.Path = strings.TrimPrefix(req.URL.Path, options.StripPrefix)
+		req.URL.Path = strings.TrimPrefix(req.URL.Path, opts.StripPrefix)
 		if req.URL.RawPath != "" {
-			req.URL.RawPath = strings.TrimPrefix(req.URL.RawPath, options.StripPrefix)
+			req.URL.RawPath = strings.TrimPrefix(req.URL.RawPath, opts.StripPrefix)
 		}
 
 		defaultDirector(req)

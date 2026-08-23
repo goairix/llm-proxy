@@ -13,7 +13,7 @@ import (
 	"time"
 )
 
-func TestNewReverseProxy_RewritesPathBeforeJoiningBasePath(t *testing.T) {
+func TestReverseProxy_RewritesPathBeforeJoiningBasePath(t *testing.T) {
 	type receivedRequest struct {
 		path  string
 		query string
@@ -31,12 +31,12 @@ func TestNewReverseProxy_RewritesPathBeforeJoiningBasePath(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	handler, err := NewReverseProxy(Options{
+	handler, err := newReverseProxy(options{
 		BaseURL:     upstream.URL + "/gateway",
 		StripPrefix: "/openai",
 	})
 	if err != nil {
-		t.Fatalf("NewReverseProxy returned unexpected error: %v", err)
+		t.Fatalf("newReverseProxy returned unexpected error: %v", err)
 	}
 
 	proxyServer := httptest.NewServer(handler)
@@ -64,7 +64,7 @@ func TestNewReverseProxy_RewritesPathBeforeJoiningBasePath(t *testing.T) {
 	}
 }
 
-func TestNewReverseProxy_PreservesEscapedPath(t *testing.T) {
+func TestReverseProxy_PreservesEscapedPath(t *testing.T) {
 	receivedEscapedPath := make(chan string, 1)
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		receivedEscapedPath <- r.URL.EscapedPath()
@@ -72,12 +72,12 @@ func TestNewReverseProxy_PreservesEscapedPath(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	handler, err := NewReverseProxy(Options{
+	handler, err := newReverseProxy(options{
 		BaseURL:     upstream.URL + "/gateway",
 		StripPrefix: "/openai",
 	})
 	if err != nil {
-		t.Fatalf("NewReverseProxy returned unexpected error: %v", err)
+		t.Fatalf("newReverseProxy returned unexpected error: %v", err)
 	}
 	proxyServer := httptest.NewServer(handler)
 	defer proxyServer.Close()
@@ -93,7 +93,7 @@ func TestNewReverseProxy_PreservesEscapedPath(t *testing.T) {
 	}
 }
 
-func TestNewReverseProxy_RejectsInvalidBaseURL(t *testing.T) {
+func TestReverseProxy_RejectsInvalidBaseURL(t *testing.T) {
 	tests := []struct {
 		name        string
 		baseURL     string
@@ -108,9 +108,9 @@ func TestNewReverseProxy_RejectsInvalidBaseURL(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := NewReverseProxy(Options{BaseURL: tt.baseURL, StripPrefix: "/openai"})
+			_, err := newReverseProxy(options{BaseURL: tt.baseURL, StripPrefix: "/openai"})
 			if err == nil {
-				t.Fatal("NewReverseProxy returned nil error")
+				t.Fatal("newReverseProxy returned nil error")
 			}
 			if !strings.Contains(err.Error(), tt.wantMessage) {
 				t.Errorf("error %q does not contain %q", err, tt.wantMessage)

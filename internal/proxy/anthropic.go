@@ -8,7 +8,7 @@ import (
 // It strips the "/anthropic" prefix from the request path and forwards to baseURL.
 // Example: /anthropic/v1/messages → https://api.anthropic.com/v1/messages
 func NewAnthropicProxy(baseURL string) (http.Handler, error) {
-	return NewReverseProxy(Options{
+	return newReverseProxy(options{
 		BaseURL:     baseURL,
 		StripPrefix: "/anthropic",
 	})
