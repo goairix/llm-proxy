@@ -53,6 +53,10 @@ type ProviderConfig struct {
 // Load reads configuration from the YAML file at path and returns a Config.
 // If the file does not exist, defaults are still applied and no error is returned.
 func Load(path string) (*Config, error) {
+	if err := loadDotEnv(); err != nil {
+		return nil, err
+	}
+
 	v := viper.New()
 
 	// Set defaults.
@@ -65,6 +69,9 @@ func Load(path string) (*Config, error) {
 	v.SetDefault("rate_limit.default.burst", 20)
 	v.SetDefault("providers.openai.base_url", "https://api.openai.com")
 	v.SetDefault("providers.anthropic.base_url", "https://api.anthropic.com")
+	if err := bindEnvironment(v); err != nil {
+		return nil, err
+	}
 
 	// Configure the config file location.
 	v.SetConfigFile(path)

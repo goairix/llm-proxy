@@ -2,15 +2,64 @@ package config
 
 import (
 	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 )
 
+var configEnvNames = []string{
+	"LLM_PROXY_SERVER_PORT",
+	"LLM_PROXY_SERVER_SHOW_BASE_URL",
+	"LLM_PROXY_LOG_LEVEL",
+	"LLM_PROXY_LOG_FILE",
+	"LLM_PROXY_LOG_MAX_AGE",
+	"LLM_PROXY_RATE_LIMIT_ENABLED",
+	"LLM_PROXY_RATE_LIMIT_DEFAULT_REQUESTS_PER_SECOND",
+	"LLM_PROXY_RATE_LIMIT_DEFAULT_BURST",
+	"LLM_PROXY_RATE_LIMIT_WHITELIST",
+	"LLM_PROXY_RATE_LIMIT_OVERRIDES",
+	"LLM_PROXY_PROVIDERS_OPENAI_BASE_URL",
+	"LLM_PROXY_PROVIDERS_ANTHROPIC_BASE_URL",
+}
+
+func isolateConfigEnvironment(t *testing.T) string {
+	t.Helper()
+
+	workDir := t.TempDir()
+	t.Chdir(workDir)
+
+	for _, name := range configEnvNames {
+		value, exists := os.LookupEnv(name)
+		if err := os.Unsetenv(name); err != nil {
+			t.Fatalf("unset %s: %v", name, err)
+		}
+		t.Cleanup(func() {
+			if exists {
+				_ = os.Setenv(name, value)
+				return
+			}
+			_ = os.Unsetenv(name)
+		})
+	}
+
+	return workDir
+}
+
+func writeConfigFile(t *testing.T, dir, contents string) string {
+	t.Helper()
+	path := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	return path
+}
+
 func TestLoad(t *testing.T) {
 	tests := []struct {
-		name        string
-		yaml        string // empty string means no file (use a path that does not exist)
-		wantErr     bool
-		check       func(t *testing.T, cfg *Config)
+		name    string
+		yaml    string // empty string means no file (use a path that does not exist)
+		wantErr bool
+		check   func(t *testing.T, cfg *Config)
 	}{
 		{
 			name: "valid config file",
@@ -171,6 +220,8 @@ server:
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
+			isolateConfigEnvironment(t)
+
 			var configPath string
 
 			if tc.yaml != "" {
@@ -207,5 +258,113 @@ server:
 
 			tc.check(t, cfg)
 		})
+	}
+}
+
+func TestLoadScalarEnvironmentOverrides(t *testing.T) {
+	workDir := isolateConfigEnvironment(t)
+	configPath := writeConfigFile(t, workDir, `
+server:
+  port: 7070
+log:
+  level: info
+rate_limit:
+  enabled: true
+providers:
+  openai:
+    base_url: https://yaml.openai.example
+`)
+
+	t.Setenv("LLM_PROXY_SERVER_PORT", "9090")
+	t.Setenv("LLM_PROXY_SERVER_SHOW_BASE_URL", "https://proxy.example")
+	t.Setenv("LLM_PROXY_LOG_LEVEL", "debug")
+	t.Setenv("LLM_PROXY_LOG_FILE", "/tmp/env-proxy.log")
+	t.Setenv("LLM_PROXY_LOG_MAX_AGE", "14")
+	t.Setenv("LLM_PROXY_RATE_LIMIT_ENABLED", "false")
+	t.Setenv("LLM_PROXY_RATE_LIMIT_DEFAULT_REQUESTS_PER_SECOND", "12.5")
+	t.Setenv("LLM_PROXY_RATE_LIMIT_DEFAULT_BURST", "25")
+	t.Setenv("LLM_PROXY_PROVIDERS_OPENAI_BASE_URL", "https://env.openai.example")
+	t.Setenv("LLM_PROXY_PROVIDERS_ANTHROPIC_BASE_URL", "https://env.anthropic.example")
+
+	cfg, err := Load(configPath)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.Server.Port != 9090 || cfg.Server.ShowBaseURL != "https://proxy.example" {
+		t.Fatalf("server config = %+v", cfg.Server)
+	}
+	if cfg.Log.Level != "debug" || cfg.Log.File != "/tmp/env-proxy.log" || cfg.Log.MaxAge != 14 {
+		t.Fatalf("log config = %+v", cfg.Log)
+	}
+	if cfg.RateLimit.Enabled || cfg.RateLimit.Default.RequestsPerSecond != 12.5 || cfg.RateLimit.Default.Burst != 25 {
+		t.Fatalf("rate limit config = %+v", cfg.RateLimit)
+	}
+	if cfg.Providers.OpenAI.BaseURL != "https://env.openai.example" || cfg.Providers.Anthropic.BaseURL != "https://env.anthropic.example" {
+		t.Fatalf("providers config = %+v", cfg.Providers)
+	}
+}
+
+func TestLoadInvalidScalarEnvironment(t *testing.T) {
+	tests := []struct {
+		name  string
+		value string
+	}{
+		{name: "LLM_PROXY_SERVER_PORT", value: "not-an-int"},
+		{name: "LLM_PROXY_RATE_LIMIT_ENABLED", value: "not-a-bool"},
+		{name: "LLM_PROXY_RATE_LIMIT_DEFAULT_REQUESTS_PER_SECOND", value: "not-a-float"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			workDir := isolateConfigEnvironment(t)
+			t.Setenv(tc.name, tc.value)
+			_, err := Load(filepath.Join(workDir, "missing.yaml"))
+			if err == nil || !strings.Contains(err.Error(), tc.name) {
+				t.Fatalf("Load() error = %v, want error containing %s", err, tc.name)
+			}
+		})
+	}
+}
+
+func TestLoadDotEnv(t *testing.T) {
+	workDir := isolateConfigEnvironment(t)
+	dotEnv := "LLM_PROXY_SERVER_PORT=7070\nLLM_PROXY_LOG_LEVEL=warn\n"
+	if err := os.WriteFile(filepath.Join(workDir, ".env"), []byte(dotEnv), 0o600); err != nil {
+		t.Fatalf("write .env: %v", err)
+	}
+
+	cfg, err := Load(filepath.Join(workDir, "missing.yaml"))
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.Server.Port != 7070 || cfg.Log.Level != "warn" {
+		t.Fatalf("config from .env = %+v", cfg)
+	}
+}
+
+func TestLoadProcessEnvironmentOverridesDotEnv(t *testing.T) {
+	workDir := isolateConfigEnvironment(t)
+	if err := os.WriteFile(filepath.Join(workDir, ".env"), []byte("LLM_PROXY_SERVER_PORT=7070\n"), 0o600); err != nil {
+		t.Fatalf("write .env: %v", err)
+	}
+	t.Setenv("LLM_PROXY_SERVER_PORT", "9090")
+
+	cfg, err := Load(filepath.Join(workDir, "missing.yaml"))
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.Server.Port != 9090 {
+		t.Fatalf("Server.Port = %d, want 9090", cfg.Server.Port)
+	}
+}
+
+func TestLoadMalformedDotEnv(t *testing.T) {
+	workDir := isolateConfigEnvironment(t)
+	if err := os.WriteFile(filepath.Join(workDir, ".env"), []byte("BROKEN=\"unterminated\n"), 0o600); err != nil {
+		t.Fatalf("write .env: %v", err)
+	}
+	_, err := Load(filepath.Join(workDir, "missing.yaml"))
+	if err == nil || !strings.Contains(err.Error(), "load .env") {
+		t.Fatalf("Load() error = %v, want .env parse error", err)
 	}
 }

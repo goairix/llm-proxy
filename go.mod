@@ -3,6 +3,7 @@ module github.com/goairix/llm-proxy
 go 1.25
 
 require (
+	github.com/joho/godotenv v1.5.1
 	github.com/lestrrat-go/file-rotatelogs v2.4.0+incompatible
 	github.com/spf13/viper v1.21.0
 	go.uber.org/zap v1.27.1
