@@ -35,8 +35,8 @@ type RateLimitConfig struct {
 
 // RateLimitRule defines a rate limiting rule.
 type RateLimitRule struct {
-	RequestsPerSecond float64 `mapstructure:"requests_per_second"`
-	Burst             int     `mapstructure:"burst"`
+	RequestsPerSecond float64 `mapstructure:"requests_per_second" json:"requests_per_second"`
+	Burst             int     `mapstructure:"burst" json:"burst"`
 }
 
 // ProvidersConfig holds LLM provider settings.
@@ -91,6 +91,9 @@ func Load(path string) (*Config, error) {
 
 	cfg := &Config{}
 	if err := v.Unmarshal(cfg); err != nil {
+		return nil, err
+	}
+	if err := applyComplexEnvironment(cfg); err != nil {
 		return nil, err
 	}
 

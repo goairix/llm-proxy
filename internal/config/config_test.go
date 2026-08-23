@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -366,5 +367,39 @@ func TestLoadMalformedDotEnv(t *testing.T) {
 	_, err := Load(filepath.Join(workDir, "missing.yaml"))
 	if err == nil || !strings.Contains(err.Error(), "load .env") {
 		t.Fatalf("Load() error = %v, want .env parse error", err)
+	}
+}
+
+func TestLoadComplexEnvironmentOverrides(t *testing.T) {
+	workDir := isolateConfigEnvironment(t)
+	t.Setenv("LLM_PROXY_RATE_LIMIT_WHITELIST", `["sk-env-a","sk-env-b"]`)
+	t.Setenv("LLM_PROXY_RATE_LIMIT_OVERRIDES", `{"sk-env":{"requests_per_second":42.5,"burst":84}}`)
+
+	cfg, err := Load(filepath.Join(workDir, "missing.yaml"))
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if !reflect.DeepEqual(cfg.RateLimit.Whitelist, []string{"sk-env-a", "sk-env-b"}) {
+		t.Fatalf("Whitelist = %#v", cfg.RateLimit.Whitelist)
+	}
+	want := RateLimitRule{RequestsPerSecond: 42.5, Burst: 84}
+	if got := cfg.RateLimit.Overrides["sk-env"]; got != want {
+		t.Fatalf("override = %+v, want %+v", got, want)
+	}
+}
+
+func TestLoadInvalidComplexEnvironment(t *testing.T) {
+	for _, name := range []string{
+		"LLM_PROXY_RATE_LIMIT_WHITELIST",
+		"LLM_PROXY_RATE_LIMIT_OVERRIDES",
+	} {
+		t.Run(name, func(t *testing.T) {
+			workDir := isolateConfigEnvironment(t)
+			t.Setenv(name, "not-json")
+			_, err := Load(filepath.Join(workDir, "missing.yaml"))
+			if err == nil || !strings.Contains(err.Error(), name) {
+				t.Fatalf("Load() error = %v, want error containing %s", err, name)
+			}
+		})
 	}
 }

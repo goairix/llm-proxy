@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -19,6 +20,8 @@ const (
 	envRateLimitEnabled           = "LLM_PROXY_RATE_LIMIT_ENABLED"
 	envRateLimitRequestsPerSecond = "LLM_PROXY_RATE_LIMIT_DEFAULT_REQUESTS_PER_SECOND"
 	envRateLimitBurst             = "LLM_PROXY_RATE_LIMIT_DEFAULT_BURST"
+	envRateLimitWhitelist         = "LLM_PROXY_RATE_LIMIT_WHITELIST"
+	envRateLimitOverrides         = "LLM_PROXY_RATE_LIMIT_OVERRIDES"
 	envOpenAIBaseURL              = "LLM_PROXY_PROVIDERS_OPENAI_BASE_URL"
 	envAnthropicBaseURL           = "LLM_PROXY_PROVIDERS_ANTHROPIC_BASE_URL"
 )
@@ -77,4 +80,18 @@ func validateBool(value string) error {
 func validateFloat(value string) error {
 	_, err := strconv.ParseFloat(value, 64)
 	return err
+}
+
+func applyComplexEnvironment(cfg *Config) error {
+	if value, ok := os.LookupEnv(envRateLimitWhitelist); ok {
+		if err := json.Unmarshal([]byte(value), &cfg.RateLimit.Whitelist); err != nil {
+			return fmt.Errorf("%s: %w", envRateLimitWhitelist, err)
+		}
+	}
+	if value, ok := os.LookupEnv(envRateLimitOverrides); ok {
+		if err := json.Unmarshal([]byte(value), &cfg.RateLimit.Overrides); err != nil {
+			return fmt.Errorf("%s: %w", envRateLimitOverrides, err)
+		}
+	}
+	return nil
 }
