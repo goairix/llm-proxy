@@ -43,7 +43,7 @@ curl http://localhost:8080/anthropic/v1/messages \
 **环境要求：** Go 1.22+
 
 ```bash
-git clone https://github.com/dysodeng/llm-proxy.git
+git clone https://github.com/goairix/llm-proxy.git
 cd llm-proxy
 
 # 复制并编辑配置文件

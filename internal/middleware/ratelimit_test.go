@@ -5,7 +5,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/dysodeng/llm-proxy/internal/config"
+	"github.com/goairix/llm-proxy/internal/config"
 )
 
 // okHandler is a simple handler that always responds 200 OK.

@@ -8,7 +8,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/dysodeng/llm-proxy/internal/config"
+	"github.com/goairix/llm-proxy/internal/config"
 )
 
 //go:embed web/index.html

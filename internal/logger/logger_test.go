@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/dysodeng/llm-proxy/internal/config"
+	"github.com/goairix/llm-proxy/internal/config"
 )
 
 // TestNew_ValidConfig verifies that New with a valid config creates a logger

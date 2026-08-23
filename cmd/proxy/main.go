@@ -10,9 +10,9 @@ import (
 
 	"go.uber.org/zap"
 
-	"github.com/dysodeng/llm-proxy/internal/config"
-	"github.com/dysodeng/llm-proxy/internal/logger"
-	"github.com/dysodeng/llm-proxy/internal/server"
+	"github.com/goairix/llm-proxy/internal/config"
+	"github.com/goairix/llm-proxy/internal/logger"
+	"github.com/goairix/llm-proxy/internal/server"
 )
 
 func main() {

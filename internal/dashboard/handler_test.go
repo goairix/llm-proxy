@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/dysodeng/llm-proxy/internal/config"
+	"github.com/goairix/llm-proxy/internal/config"
 )
 
 // newTestHandler creates a Handler with a zeroed Stats and a predictable config.

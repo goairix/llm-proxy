@@ -8,10 +8,10 @@ import (
 
 	"go.uber.org/zap"
 
-	"github.com/dysodeng/llm-proxy/internal/config"
-	"github.com/dysodeng/llm-proxy/internal/dashboard"
-	"github.com/dysodeng/llm-proxy/internal/middleware"
-	"github.com/dysodeng/llm-proxy/internal/proxy"
+	"github.com/goairix/llm-proxy/internal/config"
+	"github.com/goairix/llm-proxy/internal/dashboard"
+	"github.com/goairix/llm-proxy/internal/middleware"
+	"github.com/goairix/llm-proxy/internal/proxy"
 )
 
 // Version is the current server version.
