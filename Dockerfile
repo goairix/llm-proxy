@@ -4,8 +4,8 @@ RUN /bin/cp /usr/share/zoneinfo/Asia/Shanghai /etc/localtime \
  && echo 'Asia/Shanghai' >/etc/timezone
 
 # 支持构建时覆盖 GOPROXY，默认使用官方代理
-ARG GOPROXY=https://goproxy.cn,direct
-ENV GOPROXY=${GOPROXY}
+#ARG GOPROXY=https://goproxy.cn,direct
+#ENV GOPROXY=${GOPROXY}
 
 WORKDIR /build
 
