@@ -5,6 +5,7 @@ A lightweight reverse proxy for OpenAI and Anthropic APIs, with per-key rate lim
 ## 功能特性
 
 - **透明转发** — 请求头（含 `Authorization`、`x-api-key`）原样传递，无需修改客户端
+- **Responses API** — 支持 OpenAI Responses API 的普通响应、后台响应和 SSE 流式事件
 - **SSE 流式响应** — 原生支持 streaming，延迟零增加
 - **按 Key 限流** — Token Bucket 算法，每个 API Key 独立计数，支持白名单和自定义配额
 - **结构化日志** — zap 输出至 stdout + 按天轮转文件，记录延迟、状态码、流量
@@ -28,6 +29,12 @@ curl http://localhost:8080/openai/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{"model": "gpt-4o", "messages": [{"role": "user", "content": "Hello"}]}'
 
+# OpenAI Responses API
+curl http://localhost:8080/openai/v1/responses \
+  -H "Authorization: Bearer $OPENAI_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"model": "gpt-5", "input": "Hello"}'
+
 # Anthropic
 curl http://localhost:8080/anthropic/v1/messages \
   -H "x-api-key: $ANTHROPIC_API_KEY" \
@@ -35,6 +42,48 @@ curl http://localhost:8080/anthropic/v1/messages \
   -H "Content-Type: application/json" \
   -d '{"model": "claude-opus-4-6", "max_tokens": 1024, "messages": [{"role": "user", "content": "Hello"}]}'
 ```
+
+### OpenAI SDK
+
+OpenAI 官方 SDK 的 API 基地址应指向代理的 `/openai/v1`。SDK 会在其后追加 `/responses` 等资源路径：
+
+```python
+import os
+from openai import OpenAI
+
+client = OpenAI(
+    api_key=os.environ["OPENAI_API_KEY"],
+    base_url="http://localhost:8080/openai/v1",
+)
+
+response = client.responses.create(
+    model="gpt-5",
+    input="Hello",
+)
+print(response.output_text)
+```
+
+```javascript
+import OpenAI from "openai";
+
+const client = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY,
+  baseURL: "http://localhost:8080/openai/v1",
+});
+
+const response = await client.responses.create({
+  model: "gpt-5",
+  input: "Hello",
+});
+console.log(response.output_text);
+```
+
+这里有两种用途不同的基地址：
+
+- SDK 的 `base_url` / `baseURL`：代理入口，例如 `http://localhost:8080/openai/v1`。
+- 本项目的 `providers.openai.base_url`：真实上游，例如 `https://api.openai.com`。
+
+不要将 `providers.openai.base_url` 指向当前代理自身，否则请求会形成循环代理。若上游网关包含基础路径，例如 `https://gateway.example.com/api`，代理会将 `/openai/v1/responses` 正确转发为 `/api/v1/responses`。
 
 ## 快速开始
 
@@ -95,7 +144,7 @@ rate_limit:
 
 providers:
   openai:
-    base_url: "https://api.openai.com"   # 可替换为兼容 OpenAI 协议的第三方地址
+    base_url: "https://api.openai.com"   # 真实上游，可替换为兼容 OpenAI 协议的第三方地址
   anthropic:
     base_url: "https://api.anthropic.com"
 ```
@@ -148,6 +197,7 @@ llm-proxy/
 │   │   ├── logging.go             # 请求日志中间件
 │   │   └── ratelimit.go           # 限流中间件
 │   ├── proxy/
+│   │   ├── proxy.go               # 通用反向代理核心
 │   │   ├── openai.go              # OpenAI 反向代理
 │   │   └── anthropic.go           # Anthropic 反向代理
 │   ├── server/                    # HTTP 服务器组装与路由
