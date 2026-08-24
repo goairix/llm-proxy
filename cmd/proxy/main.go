@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"errors"
 	"log"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
@@ -12,6 +14,7 @@ import (
 
 	"github.com/goairix/llm-proxy/internal/config"
 	"github.com/goairix/llm-proxy/internal/logger"
+	"github.com/goairix/llm-proxy/internal/observability"
 	"github.com/goairix/llm-proxy/internal/server"
 )
 
@@ -29,15 +32,20 @@ func main() {
 	}
 	defer log_.Sync() //nolint:errcheck
 
+	telemetry, err := observability.New(context.Background(), cfg.Observability, server.Version, log_)
+	if err != nil {
+		log.Fatalf("failed to init observability: %v", err)
+	}
+
 	// Build and configure the HTTP server.
-	srv, err := server.New(cfg, log_)
+	srv, err := server.New(cfg, log_, telemetry)
 	if err != nil {
 		log.Fatalf("failed to create server: %v", err)
 	}
 
 	// Start serving in a background goroutine.
 	go func() {
-		if err := srv.Start(); err != nil {
+		if err := srv.Start(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log_.Error("server error", zap.Error(err))
 		}
 	}()
@@ -53,5 +61,8 @@ func main() {
 
 	if err := srv.Shutdown(ctx); err != nil {
 		log_.Error("shutdown error", zap.Error(err))
+	}
+	if err := telemetry.Shutdown(ctx); err != nil {
+		log_.Error("telemetry shutdown error", zap.Error(err))
 	}
 }

@@ -2,8 +2,10 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
+	"sync/atomic"
 	"time"
 
 	"go.uber.org/zap"
@@ -23,11 +25,17 @@ const Version = "1.0.0"
 type Server struct {
 	httpServer *http.Server
 	logger     *zap.Logger
+	ready      atomic.Bool
 }
 
 // New creates and configures the HTTP server with all routes and middleware.
 func New(cfg *config.Config, logger *zap.Logger, telemetry *observability.Runtime) (*Server, error) {
 	mux := http.NewServeMux()
+	srv := &Server{logger: logger}
+	mux.HandleFunc("GET /healthz", srv.healthHandler)
+	mux.HandleFunc("/healthz", methodNotAllowed(http.MethodGet))
+	mux.HandleFunc("GET /readyz", srv.readyHandler)
+	mux.HandleFunc("/readyz", methodNotAllowed(http.MethodGet))
 
 	// Dashboard
 	stats := &dashboard.Stats{}
@@ -67,31 +75,59 @@ func New(cfg *config.Config, logger *zap.Logger, telemetry *observability.Runtim
 		),
 	)))
 
-	httpServer := &http.Server{
+	srv.httpServer = &http.Server{
 		Addr:    fmt.Sprintf(":%d", cfg.Server.Port),
 		Handler: mux,
 	}
-
-	return &Server{
-		httpServer: httpServer,
-		logger:     logger,
-	}, nil
+	return srv, nil
 }
 
 // Start begins listening and serving HTTP requests. It blocks until the server
 // is closed. Returns http.ErrServerClosed on graceful shutdown.
 func (s *Server) Start() error {
+	s.ready.Store(true)
+	defer s.ready.Store(false)
 	s.logger.Info("server starting", zap.String("addr", s.httpServer.Addr))
 	return s.httpServer.ListenAndServe()
 }
 
 // Shutdown gracefully shuts down the server with a 10-second timeout.
 func (s *Server) Shutdown(ctx context.Context) error {
+	s.ready.Store(false)
 	shutdownCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
 	s.logger.Info("server shutting down")
 	return s.httpServer.Shutdown(shutdownCtx)
+}
+
+func (s *Server) healthHandler(w http.ResponseWriter, _ *http.Request) {
+	s.writeStatusJSON(w, http.StatusOK, "ok")
+}
+
+func (s *Server) readyHandler(w http.ResponseWriter, _ *http.Request) {
+	if !s.ready.Load() {
+		s.writeStatusJSON(w, http.StatusServiceUnavailable, "not_ready")
+		return
+	}
+	s.writeStatusJSON(w, http.StatusOK, "ready")
+}
+
+func (s *Server) writeStatusJSON(w http.ResponseWriter, status int, value string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	if err := json.NewEncoder(w).Encode(struct {
+		Status string `json:"status"`
+	}{Status: value}); err != nil {
+		s.logger.Error("write health response", zap.Error(err))
+	}
+}
+
+func methodNotAllowed(allowed string) http.HandlerFunc {
+	return func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Allow", allowed)
+		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+	}
 }
 
 // statsResponseWriter captures status code and response bytes for metrics.

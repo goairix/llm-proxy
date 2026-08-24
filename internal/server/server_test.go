@@ -1,6 +1,8 @@
 package server
 
 import (
+	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -8,7 +10,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/goairix/llm-proxy/internal/config"
 	"github.com/goairix/llm-proxy/internal/dashboard"
+	"github.com/goairix/llm-proxy/internal/observability"
+	"go.uber.org/zap"
 )
 
 func TestStatsMiddleware_TokenJSON(t *testing.T) {
@@ -155,3 +160,68 @@ func assertTokenStats(t *testing.T, stats *dashboard.TokenStats, input, output, 
 type assertServerError string
 
 func (e assertServerError) Error() string { return string(e) }
+
+func TestServerHealth(t *testing.T) {
+	telemetry, err := observability.New(context.Background(), config.ObservabilityConfig{}, Version, zap.NewNop())
+	if err != nil {
+		t.Fatalf("observability.New() error = %v", err)
+	}
+	cfg := &config.Config{
+		Server:    config.ServerConfig{Port: 8080},
+		RateLimit: config.RateLimitConfig{Enabled: false},
+		Providers: config.ProvidersConfig{
+			OpenAI:    config.ProviderConfig{BaseURL: "https://api.openai.com"},
+			Anthropic: config.ProviderConfig{BaseURL: "https://api.anthropic.com"},
+		},
+	}
+	srv, err := New(cfg, zap.NewNop(), telemetry)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	tests := []struct {
+		name, method, path, wantBody string
+		wantStatus                   int
+	}{
+		{name: "health", method: http.MethodGet, path: "/healthz", wantStatus: http.StatusOK, wantBody: "ok"},
+		{name: "not ready", method: http.MethodGet, path: "/readyz", wantStatus: http.StatusServiceUnavailable, wantBody: "not_ready"},
+		{name: "health method", method: http.MethodPost, path: "/healthz", wantStatus: http.StatusMethodNotAllowed},
+		{name: "ready method", method: http.MethodPost, path: "/readyz", wantStatus: http.StatusMethodNotAllowed},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			srv.httpServer.Handler.ServeHTTP(recorder, httptest.NewRequest(tc.method, tc.path, nil))
+			if got := recorder.Code; got != tc.wantStatus {
+				t.Fatalf("status = %d, want %d", got, tc.wantStatus)
+			}
+			if tc.wantBody != "" {
+				var body struct {
+					Status string `json:"status"`
+				}
+				if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
+					t.Fatalf("decode body: %v", err)
+				}
+				if body.Status != tc.wantBody {
+					t.Fatalf("body status = %q, want %q", body.Status, tc.wantBody)
+				}
+			}
+		})
+	}
+
+	srv.ready.Store(true)
+	readyRecorder := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(readyRecorder, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+	if readyRecorder.Code != http.StatusOK || !strings.Contains(readyRecorder.Body.String(), `"status":"ready"`) {
+		t.Fatalf("ready response = %d %q", readyRecorder.Code, readyRecorder.Body.String())
+	}
+
+	dashboardRecorder := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(dashboardRecorder, httptest.NewRequest(http.MethodGet, "/", nil))
+	if dashboardRecorder.Code != http.StatusOK || !strings.Contains(dashboardRecorder.Body.String(), "LLM 代理控制台") {
+		t.Fatalf("dashboard response = %d", dashboardRecorder.Code)
+	}
+	if !strings.Contains(dashboardRecorder.Body.String(), `"stats":{"total":0`) {
+		t.Fatalf("health requests changed dashboard stats")
+	}
+}
