@@ -12,6 +12,7 @@ import (
 	"github.com/goairix/llm-proxy/internal/dashboard"
 	"github.com/goairix/llm-proxy/internal/middleware"
 	"github.com/goairix/llm-proxy/internal/proxy"
+	"github.com/goairix/llm-proxy/internal/tokenusage"
 )
 
 // Version is the current server version.
@@ -94,8 +95,10 @@ func (s *Server) Shutdown(ctx context.Context) error {
 // statsResponseWriter captures status code and response bytes for metrics.
 type statsResponseWriter struct {
 	http.ResponseWriter
-	status int
-	bytes  int
+	status   int
+	bytes    int
+	observer tokenusage.Observer
+	writeErr error
 }
 
 func (w *statsResponseWriter) WriteHeader(code int) {
@@ -106,6 +109,12 @@ func (w *statsResponseWriter) WriteHeader(code int) {
 func (w *statsResponseWriter) Write(b []byte) (int, error) {
 	n, err := w.ResponseWriter.Write(b)
 	w.bytes += n
+	if n > 0 && w.observer != nil {
+		w.observer.Observe(w.Header().Get("Content-Type"), b[:n])
+	}
+	if err != nil && w.writeErr == nil {
+		w.writeErr = err
+	}
 	return n, err
 }
 
@@ -131,8 +140,22 @@ func statsMiddleware(provider string, stats *dashboard.Stats, next http.Handler)
 		}
 
 		start := time.Now()
-		srw := &statsResponseWriter{ResponseWriter: w, status: http.StatusOK}
+		observer := tokenusage.NewObserver(provider, r.Method, r.URL.Path)
+		srw := &statsResponseWriter{
+			ResponseWriter: w,
+			status:         http.StatusOK,
+			observer:       observer,
+		}
 		next.ServeHTTP(srw, r)
+
+		if observer != nil && srw.status >= 200 && srw.status < 300 {
+			result := observer.Finish(srw.status, srw.writeErr)
+			if result.Present {
+				stats.AddTokenUsage(provider, result.Usage)
+			} else {
+				stats.AddMissingUsage(provider)
+			}
+		}
 
 		stats.TotalLatencyMs.Add(time.Since(start).Milliseconds())
 		stats.RespBytes.Add(int64(srw.bytes))
