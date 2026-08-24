@@ -225,3 +225,66 @@ func TestServerHealth(t *testing.T) {
 		t.Fatalf("health requests changed dashboard stats")
 	}
 }
+
+func TestServerTransparentProviderRoutes(t *testing.T) {
+	type upstreamRequest struct {
+		path          string
+		authorization string
+		anthropicKey  string
+	}
+	received := make(chan upstreamRequest, 2)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		received <- upstreamRequest{
+			path:          r.URL.EscapedPath(),
+			authorization: r.Header.Get("Authorization"),
+			anthropicKey:  r.Header.Get("x-api-key"),
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"ok":true}`)
+	}))
+	defer upstream.Close()
+
+	telemetry, err := observability.New(context.Background(), config.ObservabilityConfig{}, Version, zap.NewNop())
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := &config.Config{
+		Server:    config.ServerConfig{Port: 8080},
+		RateLimit: config.RateLimitConfig{Enabled: false},
+		Providers: config.ProvidersConfig{
+			OpenAI:    config.ProviderConfig{BaseURL: upstream.URL},
+			Anthropic: config.ProviderConfig{BaseURL: upstream.URL},
+		},
+	}
+	srv, err := New(cfg, zap.NewNop(), telemetry)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name          string
+		path          string
+		authorization string
+		anthropicKey  string
+		wantPath      string
+	}{
+		{name: "openai", path: "/openai/v1/chat/completions", authorization: "Bearer sk-openai", wantPath: "/v1/chat/completions"},
+		{name: "anthropic", path: "/anthropic/v1/messages", anthropicKey: "sk-ant", wantPath: "/v1/messages"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, tc.path, strings.NewReader(`{}`))
+			req.Header.Set("Authorization", tc.authorization)
+			req.Header.Set("x-api-key", tc.anthropicKey)
+			rec := httptest.NewRecorder()
+			srv.httpServer.Handler.ServeHTTP(rec, req)
+			if rec.Code != http.StatusOK || rec.Body.String() != `{"ok":true}` {
+				t.Fatalf("response = %d %q", rec.Code, rec.Body.String())
+			}
+			got := <-received
+			if got.path != tc.wantPath || got.authorization != tc.authorization || got.anthropicKey != tc.anthropicKey {
+				t.Fatalf("upstream request = %+v", got)
+			}
+		})
+	}
+}
