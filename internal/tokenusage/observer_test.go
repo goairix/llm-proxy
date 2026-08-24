@@ -163,6 +163,108 @@ func TestParseJSONRejectsAnthropicOverflow(t *testing.T) {
 	}
 }
 
+func TestObserverSSE(t *testing.T) {
+	tests := []struct {
+		name, provider, path, stream string
+		want                         Usage
+	}{
+		{
+			name:     "OpenAI Responses",
+			provider: "openai",
+			path:     "/openai/v1/responses",
+			stream: "event: response.completed\n" +
+				"data: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"input_tokens\":10,\"output_tokens\":4,\"input_tokens_details\":{\"cached_tokens\":3},\"output_tokens_details\":{\"reasoning_tokens\":2}}}}\n\n",
+			want: Usage{Input: 10, Output: 4, CacheRead: 3, Reasoning: 2},
+		},
+		{
+			name:     "OpenAI Chat",
+			provider: "openai",
+			path:     "/openai/v1/chat/completions",
+			stream: "data: {\"object\":\"chat.completion.chunk\",\"usage\":{\"prompt_tokens\":11,\"completion_tokens\":5}}\n\n" +
+				"data: [DONE]\n\n",
+			want: Usage{Input: 11, Output: 5},
+		},
+		{
+			name:     "Anthropic Messages",
+			provider: "anthropic",
+			path:     "/anthropic/v1/messages",
+			stream: "event: message_start\r\n" +
+				"data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":10,\"cache_creation_input_tokens\":2,\"cache_read_input_tokens\":3,\"output_tokens\":1}}}\r\n\r\n" +
+				"event: message_delta\r\n" +
+				"data: {\"type\":\"message_delta\",\"usage\":{\"output_tokens\":8,\"output_tokens_details\":{\"thinking_tokens\":4}}}\r\n\r\n" +
+				"event: message_stop\r\ndata: {\"type\":\"message_stop\"}\r\n\r\n",
+			want: Usage{Input: 15, Output: 8, CacheRead: 3, CacheWrite: 2, Reasoning: 4},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, chunkSize := range []int{len(tc.stream), 1} {
+				observer := NewObserver(tc.provider, "POST", tc.path)
+				for start := 0; start < len(tc.stream); start += chunkSize {
+					end := min(start+chunkSize, len(tc.stream))
+					observer.Observe("text/event-stream; charset=utf-8", []byte(tc.stream[start:end]))
+				}
+				got := observer.Finish(200, nil)
+				if !got.Present || got.Usage != tc.want {
+					t.Fatalf("chunk size %d: Finish() = %+v, want %+v", chunkSize, got, tc.want)
+				}
+			}
+		})
+	}
+}
+
+func TestObserverSSEMergingAndRecovery(t *testing.T) {
+	t.Run("latest chat usage wins without trailing blank line", func(t *testing.T) {
+		stream := "data: {\"usage\":{\"prompt_tokens\":1,\"completion_tokens\":2}}\n\n" +
+			"data: {\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":20}}"
+		observer := NewObserver("openai", "POST", "/openai/v1/chat/completions")
+		observer.Observe("text/event-stream", []byte(stream))
+		want := Result{Usage: Usage{Input: 10, Output: 20}, Present: true}
+		if got := observer.Finish(200, nil); got != want {
+			t.Fatalf("Finish() = %+v, want %+v", got, want)
+		}
+		if got := observer.Finish(200, nil); got != want {
+			t.Fatalf("second Finish() = %+v, want %+v", got, want)
+		}
+	})
+
+	t.Run("latest cumulative anthropic delta wins", func(t *testing.T) {
+		stream := "data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":4,\"output_tokens\":0}}}\n\n" +
+			"data: {\"type\":\"message_delta\",\"usage\":{\"output_tokens\":3}}\n\n" +
+			"data: {\"type\":\"message_delta\",\"usage\":{\"output_tokens\":7}}\n\n"
+		observer := NewObserver("anthropic", "POST", "/anthropic/v1/messages")
+		observer.Observe("text/event-stream", []byte(stream))
+		want := Result{Usage: Usage{Input: 4, Output: 7}, Present: true}
+		if got := observer.Finish(200, nil); got != want {
+			t.Fatalf("Finish() = %+v, want %+v", got, want)
+		}
+	})
+
+	t.Run("oversized event is discarded and next event parses", func(t *testing.T) {
+		stream := "data: " + strings.Repeat("x", maxCaptureBytes+1) + "\n\n" +
+			"data: {\"usage\":{\"prompt_tokens\":9,\"completion_tokens\":4}}\n\n"
+		observer := NewObserver("openai", "POST", "/openai/v1/chat/completions")
+		observer.Observe("text/event-stream", []byte(stream))
+		want := Result{Usage: Usage{Input: 9, Output: 4}, Present: true}
+		if got := observer.Finish(200, nil); got != want {
+			t.Fatalf("Finish() = %+v, want %+v", got, want)
+		}
+	})
+
+	t.Run("invalid and negative events are ignored", func(t *testing.T) {
+		stream := ": ping\n\n" +
+			"data: not-json\n\n" +
+			"data: {\"usage\":{\"prompt_tokens\":-1,\"completion_tokens\":4}}\n\n" +
+			"data: [DONE]\n\n"
+		observer := NewObserver("openai", "POST", "/openai/v1/chat/completions")
+		observer.Observe("text/event-stream", []byte(stream))
+		if got := observer.Finish(200, nil); got.Present {
+			t.Fatalf("Finish() = %+v, want missing", got)
+		}
+	})
+}
+
 type assertError string
 
 func (e assertError) Error() string { return string(e) }

@@ -101,7 +101,14 @@ func parseOpenAICompletions(data []byte) Result {
 
 func parseAnthropic(data []byte) Result {
 	var raw anthropicUsage
-	if err := json.Unmarshal(data, &raw); err != nil || !requiredNonNegative(raw.InputTokens, raw.OutputTokens) {
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return Result{}
+	}
+	return normalizeAnthropic(raw)
+}
+
+func normalizeAnthropic(raw anthropicUsage) Result {
+	if !requiredNonNegative(raw.InputTokens, raw.OutputTokens) {
 		return Result{}
 	}
 	cacheWrite := optionalValue(raw.CacheCreationInput)

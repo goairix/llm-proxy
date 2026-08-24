@@ -41,6 +41,7 @@ type observer struct {
 	oversized bool
 	finished  bool
 	result    Result
+	sse       sseDecoder
 }
 
 // NewObserver returns an observer only for token-bearing generation endpoints.
@@ -48,7 +49,11 @@ func NewObserver(provider, method, path string) Observer {
 	if method != "POST" || !eligibleEndpoint(provider, path) {
 		return nil
 	}
-	return &observer{provider: provider, path: path}
+	return &observer{
+		provider: provider,
+		path:     path,
+		sse:      sseDecoder{provider: provider, path: path},
+	}
 }
 
 func eligibleEndpoint(provider, path string) bool {
@@ -79,6 +84,7 @@ func (o *observer) Observe(contentType string, chunk []byte) {
 		}
 	}
 	if o.mode != responseModeJSON {
+		o.sse.Observe(chunk)
 		return
 	}
 	if len(chunk) > maxCaptureBytes-len(o.jsonBody) {
@@ -99,6 +105,8 @@ func (o *observer) Finish(status int, writeErr error) Result {
 	}
 	if o.mode == responseModeJSON {
 		o.result = parseJSON(o.provider, o.path, o.jsonBody)
+	} else if o.mode == responseModeSSE {
+		o.result = o.sse.Finish()
 	}
 	return o.result
 }
