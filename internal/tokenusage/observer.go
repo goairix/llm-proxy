@@ -1,29 +1,21 @@
 package tokenusage
 
-import "strings"
+import (
+	"strings"
+
+	appRuntime "github.com/goairix/llm-proxy/internal/application/runtime"
+)
 
 const maxCaptureBytes = 2 << 20
 
-// Usage is the normalized token usage for one completed request.
-type Usage struct {
-	Input      int64
-	Output     int64
-	CacheRead  int64
-	CacheWrite int64
-	Reasoning  int64
-}
+// Usage is kept as a compatibility alias while token parsing moves behind the application port.
+type Usage = appRuntime.TokenUsage
 
-// Result reports whether a valid usage object was present.
-type Result struct {
-	Usage   Usage
-	Present bool
-}
+// Result is kept as a compatibility alias while token parsing moves behind the application port.
+type Result = appRuntime.UsageResult
 
-// Observer incrementally observes an eligible response and returns one result.
-type Observer interface {
-	Observe(contentType string, chunk []byte)
-	Finish(status int, writeErr error) Result
-}
+// Observer is kept as a compatibility alias while token parsing moves behind the application port.
+type Observer = appRuntime.UsageObserver
 
 type responseMode uint8
 

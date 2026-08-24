@@ -8,8 +8,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	appRuntime "github.com/goairix/llm-proxy/internal/application/runtime"
 	"github.com/goairix/llm-proxy/internal/config"
-	"github.com/goairix/llm-proxy/internal/tokenusage"
 )
 
 //go:embed web/index.html
@@ -54,7 +54,7 @@ type TokenCounters struct {
 }
 
 // AddTokenUsage adds one valid usage result to total and provider counters.
-func (s *Stats) AddTokenUsage(provider string, usage tokenusage.Usage) {
+func (s *Stats) AddTokenUsage(provider string, usage appRuntime.TokenUsage) {
 	providerStats := s.tokenStats(provider)
 	if providerStats == nil {
 		return
@@ -84,7 +84,7 @@ func (s *Stats) tokenStats(provider string) *TokenStats {
 	}
 }
 
-func addTokenUsage(stats *TokenStats, usage tokenusage.Usage) {
+func addTokenUsage(stats *TokenStats, usage appRuntime.TokenUsage) {
 	stats.Input.Add(usage.Input)
 	stats.Output.Add(usage.Output)
 	stats.CacheRead.Add(usage.CacheRead)

@@ -10,6 +10,7 @@ import (
 
 	"go.uber.org/zap"
 
+	appRuntime "github.com/goairix/llm-proxy/internal/application/runtime"
 	"github.com/goairix/llm-proxy/internal/config"
 	"github.com/goairix/llm-proxy/internal/dashboard"
 	"github.com/goairix/llm-proxy/internal/middleware"
@@ -19,7 +20,7 @@ import (
 )
 
 // Version is the current server version.
-const Version = "1.0.0"
+const Version = appRuntime.Version
 
 // Server wraps the standard library HTTP server and holds a logger.
 type Server struct {
@@ -135,7 +136,7 @@ type statsResponseWriter struct {
 	http.ResponseWriter
 	status   int
 	bytes    int
-	observer tokenusage.Observer
+	observer appRuntime.UsageObserver
 	writeErr error
 }
 
