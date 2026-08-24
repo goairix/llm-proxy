@@ -5,6 +5,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 	"go.uber.org/zap/zaptest"
@@ -237,5 +238,48 @@ func TestResponseWriterImplementsFlusher(t *testing.T) {
 	flusher.Flush()
 	if !rec.Flushed {
 		t.Error("expected underlying ResponseRecorder to have been flushed")
+	}
+}
+
+func TestLoggingMiddlewareTraceCorrelation(t *testing.T) {
+	core, logs := observer.New(zapcore.DebugLevel)
+	logger := zap.New(core)
+	sc := trace.NewSpanContext(trace.SpanContextConfig{
+		TraceID:    trace.TraceID{1, 2, 3},
+		SpanID:     trace.SpanID{4, 5, 6},
+		TraceFlags: trace.FlagsSampled,
+	})
+	handler := Logging(logger)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	req := httptest.NewRequest(http.MethodGet, "/openai/v1/responses", nil)
+	req = req.WithContext(trace.ContextWithSpanContext(req.Context(), sc))
+	handler.ServeHTTP(httptest.NewRecorder(), req)
+
+	if logs.Len() != 1 {
+		t.Fatalf("log entries = %d, want 1", logs.Len())
+	}
+	fields := logs.All()[0].ContextMap()
+	if fields["trace_id"] != sc.TraceID().String() {
+		t.Fatalf("trace_id = %v, want %s", fields["trace_id"], sc.TraceID())
+	}
+	if fields["span_id"] != sc.SpanID().String() {
+		t.Fatalf("span_id = %v, want %s", fields["span_id"], sc.SpanID())
+	}
+}
+
+func TestLoggingMiddlewareOmitsInvalidTraceCorrelation(t *testing.T) {
+	core, logs := observer.New(zapcore.DebugLevel)
+	handler := Logging(zap.New(core))(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/openai/v1/responses", nil))
+
+	fields := logs.All()[0].ContextMap()
+	if _, ok := fields["trace_id"]; ok {
+		t.Fatal("invalid context logged trace_id")
+	}
+	if _, ok := fields["span_id"]; ok {
+		t.Fatal("invalid context logged span_id")
 	}
 }

@@ -12,6 +12,7 @@ import (
 type options struct {
 	BaseURL     string
 	StripPrefix string
+	Transport   http.RoundTripper
 }
 
 // newReverseProxy creates a reverse proxy that removes a public route prefix
@@ -29,6 +30,9 @@ func newReverseProxy(opts options) (http.Handler, error) {
 	}
 
 	reverseProxy := httputil.NewSingleHostReverseProxy(target)
+	if opts.Transport != nil {
+		reverseProxy.Transport = opts.Transport
+	}
 	defaultDirector := reverseProxy.Director
 	reverseProxy.Director = func(req *http.Request) {
 		req.URL.Path = strings.TrimPrefix(req.URL.Path, opts.StripPrefix)

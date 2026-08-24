@@ -119,12 +119,46 @@ func TestReverseProxy_RejectsInvalidBaseURL(t *testing.T) {
 	}
 }
 
+func TestProviderProxyUsesInjectedTransport(t *testing.T) {
+	called := false
+	transport := roundTripperFunc(func(request *http.Request) (*http.Response, error) {
+		called = true
+		if request.URL.Path != "/v1/responses" {
+			t.Errorf("transport path = %q, want /v1/responses", request.URL.Path)
+		}
+		return &http.Response{
+			StatusCode: http.StatusNoContent,
+			Header:     make(http.Header),
+			Body:       io.NopCloser(strings.NewReader("")),
+			Request:    request,
+		}, nil
+	})
+	handler, err := NewOpenAIProxy("https://api.example", transport)
+	if err != nil {
+		t.Fatalf("NewOpenAIProxy() error = %v", err)
+	}
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/openai/v1/responses", nil))
+	if !called {
+		t.Fatal("injected transport was not called")
+	}
+	if recorder.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204", recorder.Code)
+	}
+}
+
+type roundTripperFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripperFunc) RoundTrip(request *http.Request) (*http.Response, error) {
+	return f(request)
+}
+
 func TestProviderProxies_JoinUpstreamBasePathAfterStrippingPrefix(t *testing.T) {
 	tests := []struct {
 		name        string
 		requestPath string
 		wantPath    string
-		newProxy    func(string) (http.Handler, error)
+		newProxy    func(string, http.RoundTripper) (http.Handler, error)
 	}{
 		{
 			name:        "OpenAI Responses API",
@@ -149,7 +183,7 @@ func TestProviderProxies_JoinUpstreamBasePathAfterStrippingPrefix(t *testing.T) 
 			}))
 			defer upstream.Close()
 
-			handler, err := tt.newProxy(upstream.URL + "/gateway")
+			handler, err := tt.newProxy(upstream.URL+"/gateway", nil)
 			if err != nil {
 				t.Fatalf("proxy constructor returned unexpected error: %v", err)
 			}
@@ -202,7 +236,7 @@ func TestNewOpenAIProxy_ResponsesAPI(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	handler, err := NewOpenAIProxy(upstream.URL)
+	handler, err := NewOpenAIProxy(upstream.URL, nil)
 	if err != nil {
 		t.Fatalf("NewOpenAIProxy returned unexpected error: %v", err)
 	}
@@ -285,7 +319,7 @@ func TestNewOpenAIProxy_ResponsesAPIStreaming(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	handler, err := NewOpenAIProxy(upstream.URL)
+	handler, err := NewOpenAIProxy(upstream.URL, nil)
 	if err != nil {
 		t.Fatalf("NewOpenAIProxy returned unexpected error: %v", err)
 	}
@@ -357,7 +391,7 @@ func TestNewOpenAIProxy_StripPrefix(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	handler, err := NewOpenAIProxy(upstream.URL)
+	handler, err := NewOpenAIProxy(upstream.URL, nil)
 	if err != nil {
 		t.Fatalf("NewOpenAIProxy returned unexpected error: %v", err)
 	}
@@ -388,7 +422,7 @@ func TestNewAnthropicProxy_StripPrefix(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	handler, err := NewAnthropicProxy(upstream.URL)
+	handler, err := NewAnthropicProxy(upstream.URL, nil)
 	if err != nil {
 		t.Fatalf("NewAnthropicProxy returned unexpected error: %v", err)
 	}
@@ -419,7 +453,7 @@ func TestNewOpenAIProxy_HeadersForwarded(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	handler, err := NewOpenAIProxy(upstream.URL)
+	handler, err := NewOpenAIProxy(upstream.URL, nil)
 	if err != nil {
 		t.Fatalf("NewOpenAIProxy returned unexpected error: %v", err)
 	}
@@ -456,7 +490,7 @@ func TestNewAnthropicProxy_HeadersForwarded(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	handler, err := NewAnthropicProxy(upstream.URL)
+	handler, err := NewAnthropicProxy(upstream.URL, nil)
 	if err != nil {
 		t.Fatalf("NewAnthropicProxy returned unexpected error: %v", err)
 	}

@@ -11,6 +11,7 @@ import (
 	"github.com/goairix/llm-proxy/internal/config"
 	"github.com/goairix/llm-proxy/internal/dashboard"
 	"github.com/goairix/llm-proxy/internal/middleware"
+	"github.com/goairix/llm-proxy/internal/observability"
 	"github.com/goairix/llm-proxy/internal/proxy"
 	"github.com/goairix/llm-proxy/internal/tokenusage"
 )
@@ -25,7 +26,7 @@ type Server struct {
 }
 
 // New creates and configures the HTTP server with all routes and middleware.
-func New(cfg *config.Config, logger *zap.Logger) (*Server, error) {
+func New(cfg *config.Config, logger *zap.Logger, telemetry *observability.Runtime) (*Server, error) {
 	mux := http.NewServeMux()
 
 	// Dashboard
@@ -42,28 +43,29 @@ func New(cfg *config.Config, logger *zap.Logger) (*Server, error) {
 
 	// Logging middleware (outermost layer)
 	loggingMiddleware := middleware.Logging(logger)
+	transport := telemetry.Transport(http.DefaultTransport)
 
 	// OpenAI proxy
-	openaiProxy, err := proxy.NewOpenAIProxy(cfg.Providers.OpenAI.BaseURL)
+	openaiProxy, err := proxy.NewOpenAIProxy(cfg.Providers.OpenAI.BaseURL, transport)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create openai proxy: %w", err)
 	}
-	mux.Handle("/openai/", loggingMiddleware(
+	mux.Handle("/openai/", telemetry.WrapHandler("openai", loggingMiddleware(
 		statsMiddleware("openai", stats,
 			rateLimiter.Handler("openai", openaiProxy),
 		),
-	))
+	)))
 
 	// Anthropic proxy
-	anthropicProxy, err := proxy.NewAnthropicProxy(cfg.Providers.Anthropic.BaseURL)
+	anthropicProxy, err := proxy.NewAnthropicProxy(cfg.Providers.Anthropic.BaseURL, transport)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create anthropic proxy: %w", err)
 	}
-	mux.Handle("/anthropic/", loggingMiddleware(
+	mux.Handle("/anthropic/", telemetry.WrapHandler("anthropic", loggingMiddleware(
 		statsMiddleware("anthropic", stats,
 			rateLimiter.Handler("anthropic", anthropicProxy),
 		),
-	))
+	)))
 
 	httpServer := &http.Server{
 		Addr:    fmt.Sprintf(":%d", cfg.Server.Port),

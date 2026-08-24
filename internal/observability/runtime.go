@@ -11,6 +11,7 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetrichttp"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
+	otelmetric "go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/resource"
@@ -29,6 +30,9 @@ type Runtime struct {
 	propagator     propagation.TextMapPropagator
 	shutdownOnce   sync.Once
 	shutdownErr    error
+	requests       otelmetric.Int64Counter
+	inFlight       otelmetric.Int64UpDownCounter
+	rateRejections otelmetric.Int64Counter
 }
 
 // New creates an OpenTelemetry runtime. Disabled configuration creates no exporters.
@@ -95,10 +99,47 @@ func New(ctx context.Context, cfg config.ObservabilityConfig, serviceVersion str
 	runtime.tracerProvider = tracerProvider
 	runtime.meterProvider = meterProvider
 	runtime.propagator = propagator
+	if err := runtime.initHTTPInstruments(); err != nil {
+		_ = tracerProvider.Shutdown(ctx)
+		_ = meterProvider.Shutdown(ctx)
+		return nil, err
+	}
 	otel.SetTracerProvider(tracerProvider)
 	otel.SetMeterProvider(meterProvider)
 	otel.SetTextMapPropagator(propagator)
 	return runtime, nil
+}
+
+func (r *Runtime) initHTTPInstruments() error {
+	meter := r.meterProvider.Meter("github.com/goairix/llm-proxy/internal/observability")
+	requests, err := meter.Int64Counter(
+		"llm_proxy.requests",
+		otelmetric.WithUnit("{request}"),
+		otelmetric.WithDescription("Completed LLM proxy requests"),
+	)
+	if err != nil {
+		return fmt.Errorf("create request counter: %w", err)
+	}
+	inFlight, err := meter.Int64UpDownCounter(
+		"llm_proxy.requests.in_flight",
+		otelmetric.WithUnit("{request}"),
+		otelmetric.WithDescription("LLM proxy requests currently in flight"),
+	)
+	if err != nil {
+		return fmt.Errorf("create in-flight counter: %w", err)
+	}
+	rateRejections, err := meter.Int64Counter(
+		"llm_proxy.rate_limit.rejections",
+		otelmetric.WithUnit("{request}"),
+		otelmetric.WithDescription("Requests rejected by the proxy rate limiter"),
+	)
+	if err != nil {
+		return fmt.Errorf("create rate-limit rejection counter: %w", err)
+	}
+	r.requests = requests
+	r.inFlight = inFlight
+	r.rateRejections = rateRejections
+	return nil
 }
 
 // Shutdown flushes and closes providers exactly once.

@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/zap"
 )
 
@@ -132,6 +133,13 @@ func Logging(logger *zap.Logger) func(http.Handler) http.Handler {
 				zap.Int64("latency_ms", latencyMs),
 				zap.Int64("req_bytes", reqBytes),
 				zap.Int("resp_bytes", rw.bytes),
+			}
+			spanContext := trace.SpanContextFromContext(r.Context())
+			if spanContext.IsValid() {
+				fields = append(fields,
+					zap.String("trace_id", spanContext.TraceID().String()),
+					zap.String("span_id", spanContext.SpanID().String()),
+				)
 			}
 
 			switch {
