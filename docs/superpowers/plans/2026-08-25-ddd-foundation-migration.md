@@ -16,6 +16,8 @@
 
 本计划只做阶段一 A，不增加 `/v1/chat/completions`、`/v1/messages`、统一协议模型或新供应商连接器。
 
+执行本计划前必须遵守仓库 Git 规范：禁止使用 worktree；从正确的基线分支创建并切换到 `feat/ddd-foundation-migration`，所有任务提交均落在该功能分支，禁止直接在 `main`、`master` 或其他长期分支上实施。
+
 必须保持：
 
 - `/openai/*`、`/anthropic/*` 路由、Path/RawPath、Host 和 Header 行为；
@@ -44,14 +46,26 @@ internal/di/                                   # Wire 组装根
 
 ## 二、任务
 
-### 任务 1：建立迁移基线并补充透明代理端到端特征测试
+### 任务 1：创建功能分支、建立迁移基线并补充透明代理端到端特征测试
 
 **文件：**
 
 - 修改：`internal/server/server_test.go`
 - 不修改生产代码
 
-- [ ] **步骤 1：记录迁移前基线**
+- [ ] **步骤 1：确认工作区并创建普通功能分支**
+
+运行：
+
+```bash
+git status --short
+git branch --show-current
+git switch -c feat/ddd-foundation-migration
+```
+
+预期：执行前工作区干净；当前分支切换为 `feat/ddd-foundation-migration`。如果该分支已经存在，使用 `git switch feat/ddd-foundation-migration`，不要重复创建；整个过程禁止执行 `git worktree`。
+
+- [ ] **步骤 2：记录迁移前基线**
 
 运行：
 
@@ -59,12 +73,11 @@ internal/di/                                   # Wire 组装根
 go test ./...
 go test -race ./internal/observability ./internal/middleware ./internal/proxy ./internal/server
 go build -o /tmp/llm-proxy ./cmd/proxy
-git status --short
 ```
 
-预期：全部通过；`git status --short` 为空。若失败，先记录并修复基线问题，不进入目录迁移。
+预期：全部通过。若失败，先记录并修复基线问题，不进入目录迁移。
 
-- [ ] **步骤 2：添加双供应商端到端特征测试**
+- [ ] **步骤 3：添加双供应商端到端特征测试**
 
 在 `internal/server/server_test.go` 增加：
 
@@ -129,7 +142,7 @@ func TestServerTransparentProviderRoutes(t *testing.T) {
 }
 ```
 
-- [ ] **步骤 3：运行新增测试，确认当前实现通过**
+- [ ] **步骤 4：运行新增测试，确认当前实现通过**
 
 运行：
 
@@ -139,7 +152,7 @@ go test ./internal/server -run TestServerTransparentProviderRoutes -v
 
 预期：PASS。该测试是特征测试，不要求先失败；它记录现有组装语义。
 
-- [ ] **步骤 4：提交特征测试**
+- [ ] **步骤 5：提交特征测试**
 
 ```bash
 git add internal/server/server_test.go

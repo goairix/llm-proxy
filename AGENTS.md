@@ -40,6 +40,15 @@ docker build -t llm-proxy .
 
 修改 Go 文件后运行 `gofmt`。只有依赖确实发生变化时才运行 `go mod tidy`，并检查 `go.mod`、`go.sum` 的差异。
 
+## Git 工作流
+
+- 禁止使用 `git worktree` 或任何基于 worktree 的隔离流程；所有开发都在普通 Git 分支中完成。
+- 分支名使用 `<类型>/<说明>` 格式，说明部分使用简短、清晰的小写英文单词并以连字符分隔，例如 `feat/unified-gateway`、`bugfix/sse-flush`、`hotfix/credential-leak`。
+- 类型按任务性质选择，常用值包括 `feat`、`bugfix`、`hotfix`、`refactor`、`docs`、`test`、`chore`。
+- 新功能开发必须先从正确的基线分支创建独立的 `feat/*` 分支，禁止直接在 `main`、`master` 或其他长期分支上开发。
+- Bug 修复使用 `bugfix/*`；需要紧急上线的生产修复使用 `hotfix/*`。除非用户明确指定，不混用分支类型。
+- 开始修改前检查当前分支和工作区状态；若存在用户未提交的改动，必须保留并避免覆盖，不得为了切分支而清理或丢弃这些改动。
+
 ## 请求链路与路由
 
 代理请求的实际处理顺序是：
