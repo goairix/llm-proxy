@@ -4,7 +4,7 @@
 
 ## 项目概览
 
-`llm-proxy` 是一个 Go HTTP 反向代理，为 OpenAI 和 Anthropic API 提供路径转发、按 API Key 限流、结构化日志和内嵌 Dashboard。项目不做两种协议之间的格式转换。
+`llm-proxy` 是一个 Go HTTP 反向代理，为 OpenAI 和 Anthropic API 提供路径转发、按 API Key 限流、OpenTelemetry traces/metrics、结构化日志、Token 统计和内嵌 Dashboard。项目不做两种协议之间的格式转换。
 
 - Module：`github.com/goairix/llm-proxy`
 - Go：1.25（Docker 构建镜像当前为 Go 1.25.4）
@@ -12,6 +12,7 @@
 - 配置：Viper + `config.yaml` + godotenv
 - 日志：Zap + `file-rotatelogs`
 - 限流：`golang.org/x/time/rate`
+- 可观测：OpenTelemetry Go SDK + OTLP/HTTP exporter + `otelhttp`
 - 前端：单个内嵌 HTML 文件，无独立构建步骤
 
 ## 常用命令
@@ -44,22 +45,26 @@ docker build -t llm-proxy .
 代理请求的实际处理顺序是：
 
 ```text
-客户端 → Logging → Stats → RateLimiter → ReverseProxy → 上游 API
+客户端 → OTel Server → Logging → Stats/Token Observer → RateLimiter → ReverseProxy → OTel Transport → 上游 API
 ```
 
 - `/openai/*`：去掉 `/openai` 前缀后转发到 OpenAI `base_url`。
 - `/anthropic/*`：去掉 `/anthropic` 前缀后转发到 Anthropic `base_url`。
+- `/healthz`：存活检查；不经过代理日志、统计、限流和 OTel proxy handler。
+- `/readyz`：就绪检查；开始监听前/关闭开始后返回 503，同样不经过代理链。
 - `/`：Dashboard handler。由于它注册为 ServeMux 的根模式，当前还会接住所有未匹配路径；不要默认未知路径一定返回 404。
 - Dashboard 不经过代理请求的日志、统计和限流中间件。
 
-中间件的包裹顺序有意让 Logging 记录完整请求，让 Stats 统计被限流的请求，并让 RateLimiter 在访问上游前拒绝请求。调整顺序前应更新相应测试并检查统计语义。
+中间件的包裹顺序有意让 OTel span 覆盖完整代理请求、Logging 读取 span context、Stats 统计被限流的请求，并让 RateLimiter 在访问上游前拒绝请求。调整顺序前应更新相应测试并检查 trace parent、SSE、Token 和统计语义。
 
 ## 目录职责
 
-- `cmd/proxy/main.go`：加载 `config.yaml`、初始化日志与服务器、监听信号并优雅退出。
+- `cmd/proxy/main.go`：加载 `config.yaml`、初始化日志/OTel/服务器、监听信号并依次关闭服务器与 telemetry。
 - `internal/config`：配置结构、默认值、YAML、`.env` 和进程环境变量加载；配置文件缺失时使用默认值，文件存在但无效时启动失败。
 - `internal/server`：路由和中间件组装、Dashboard 统计、HTTP 服务器生命周期；版本号定义在这里。
 - `internal/proxy`：创建两个反向代理，修改目标地址、Host、Path 和 RawPath。
+- `internal/observability`：解析 OTel 标准环境变量、管理 OTLP/HTTP exporter/provider 生命周期、HTTP server/client 插桩和低基数业务 metrics。
+- `internal/tokenusage`：识别五个生成端点，增量解析 JSON/SSE usage 并归一化 OpenAI/Anthropic Token 字段。
 - `internal/middleware`：访问日志、API Key 提取、令牌桶限流。
 - `internal/dashboard`：原子统计、Dashboard 数据注入和页面响应。
 - `internal/dashboard/web/index.html`：Dashboard 源文件，通过 `go:embed` 编入二进制。
@@ -88,6 +93,17 @@ docker build -t llm-proxy .
 - 4xx/5xx 响应体最多捕获 4096 字节作为 `upstream_error`。修改捕获逻辑时不得破坏响应透传或流式刷新。
 - 客户端 IP 提取优先级为 `X-Forwarded-For` 首项、`X-Real-IP`、`RemoteAddr`。
 - 不要把真实密钥、私有上游地址或其他凭据写入 `config.yaml`、测试夹具、日志样例或文档。
+- 有效 span context 的 Zap 请求日志必须带 `trace_id` 和 `span_id`；无效 context 不写空字段。
+
+### OpenTelemetry
+
+- `observability.enabled=false` 时不得创建 exporter、连接 Collector 或产生后台导出 goroutine。
+- 只支持 OTLP/HTTP protobuf。标准 endpoint 优先级是 signal-specific > general `OTEL_EXPORTER_OTLP_ENDPOINT` > 项目配置；`OTEL_SERVICE_NAME` 覆盖项目 service name。
+- Token 统计只进入 Dashboard，禁止加入 OTel metrics。自定义业务 metrics 的维度仅限规范化的 `provider`、`endpoint`、`outcome`。
+- 禁止在 span/metrics attributes 中加入 API Key、Prompt、模型输出、正文、model、原始动态 path、资源 ID 或 query。
+- `otelhttp` 会自动记录 URL。任何 server/client 插桩都必须先使用静态 `/{provider}/{endpoint}` URL，清空 query/fragment，再在业务 handler 或底层 RoundTripper 前恢复原始 URL/Host/RequestURI。
+- 代理 transport 必须延续入站 context 并向上游注入 `traceparent`；client span 的 parent 应为对应 server span。
+- 修改 OTel 配置、Runtime、插桩或 transport 后至少运行 `go test -race ./internal/observability ./internal/middleware ./internal/proxy ./internal/server` 和完整 build。
 
 ### Dashboard 与统计
 
@@ -96,6 +112,10 @@ docker build -t llm-proxy .
 - Dashboard 在每次请求时将 JSON 注入 `</head>` 前。注入字段变化时同步更新 HTML 使用方和 handler 测试。
 - 修改 `internal/dashboard/web/index.html` 后必须重新构建 Go 二进制才能生效；没有单独的前端打包命令。
 - Dashboard 的用户界面文字保持中文；Go 标识符和注释遵循周边文件现有风格。
+- Token 统计固定为 Total/OpenAI/Anthropic 三组原子累计值，进程重启清零；不要增加模型、Key、租户或时间序列维度。
+- Token Observer 只处理五个精确 POST 端点和 2xx 响应。4xx/429/5xx、Responses retrieve 和未知路径不得增加 Token 或 missing usage。
+- JSON 响应和单个 SSE line/event 的捕获上限为 2 MiB。超限、非法 JSON 或客户端写错误不得影响响应透传；成功的 eligible 请求应计入 missing usage。
+- SSE parser 必须支持任意网络分块、CRLF、多 `data:` 行和无尾随空行，并把累计 usage 覆盖而非逐 delta 相加。任何改动都必须验证首事件可在上游结束前 Flush 给客户端。
 
 ### 配置与生命周期
 
@@ -103,7 +123,8 @@ docker build -t llm-proxy .
 - 列表和映射环境变量使用 JSON，非法的数字、布尔值或 JSON 必须导致启动失败。
 - 新增配置字段时同步修改配置结构、Viper 默认值、`internal/config/env.go`、`config.yaml`、`.env.example` 和配置测试；若 Dashboard 展示该字段，也要更新其注入结构和页面。
 - 配置不会热更新，修改后需要重启进程。
-- `main` 提供 30 秒外层退出期限，`Server.Shutdown` 再限制为 10 秒。更改退出流程时要保留 SIGINT/SIGTERM 的优雅关闭。
+- OTel 项目配置包括 enabled、service name、OTLP endpoint、trace sample ratio 和 metrics interval；还要检查标准 `OTEL_*` 环境变量的覆盖与协议校验。
+- `main` 提供 30 秒外层退出期限，`Server.Shutdown` 再限制为 10 秒。收到 SIGINT/SIGTERM 后必须先将 ready 置 false，再关闭 HTTP server，最后 ForceFlush/Shutdown telemetry；某一步失败不得跳过后续关闭。
 
 ## 常见改动落点
 
@@ -114,6 +135,9 @@ docker build -t llm-proxy .
 | 修改限流 | `internal/middleware/ratelimit.go`、`ratelimit_test.go`、Dashboard 展示 |
 | 修改请求日志 | `internal/middleware/logging.go`、`logging_test.go`、`internal/logger` |
 | 修改统计或 Dashboard | `internal/server/server.go`、`internal/dashboard/handler.go`、对应测试和 HTML |
+| 修改 Token usage 解析 | `internal/tokenusage/*.go`、`internal/server/server.go`、Dashboard 统计与流式测试 |
+| 修改 OTel 或 HTTP 插桩 | `internal/observability/*.go`、Logging、Proxy transport、Server 组装和 race 测试 |
+| 修改健康检查或退出 | `internal/server/server.go`、`cmd/proxy/main.go`、server 测试 |
 | 修改版本号 | `internal/server/server.go` 中的 `Version`，并检查页面展示 |
 
 ## 测试与提交前检查

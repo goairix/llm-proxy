@@ -786,7 +786,7 @@ git commit -m "feat: add health checks and telemetry lifecycle"
 
 - [ ] **Step 3: 运行格式化和包级测试**
 
-Run: `gofmt -w cmd/proxy/*.go internal/config/*.go internal/dashboard/*.go internal/middleware/*.go internal/observability/*.go internal/proxy/*.go internal/ratelimit/*.go internal/server/*.go internal/tokenusage/*.go`
+Run: `gofmt -w cmd/proxy/*.go internal/config/*.go internal/dashboard/*.go internal/logger/*.go internal/middleware/*.go internal/observability/*.go internal/proxy/*.go internal/server/*.go internal/tokenusage/*.go`
 
 Run: `go test ./internal/tokenusage ./internal/dashboard ./internal/observability ./internal/middleware ./internal/proxy ./internal/server -count=1`
 
