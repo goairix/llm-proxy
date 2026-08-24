@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/goairix/llm-proxy/internal/config"
+	"github.com/goairix/llm-proxy/internal/tokenusage"
 )
 
 // newTestHandler creates a Handler with a zeroed Stats and a predictable config.
@@ -136,4 +137,95 @@ func TestHandler_UptimeIncreasing(t *testing.T) {
 	if pd.Uptime == "" {
 		t.Error("expected non-empty uptime field")
 	}
+}
+
+func TestHandler_TokenStatsInjected(t *testing.T) {
+	h, stats := newTestHandler("1.0.0")
+	stats.AddTokenUsage("openai", tokenusage.Usage{Input: 100, Output: 20, CacheRead: 30, CacheWrite: 5, Reasoning: 8})
+	stats.AddTokenUsage("anthropic", tokenusage.Usage{Input: 50, Output: 10, CacheRead: 15, CacheWrite: 4, Reasoning: 3})
+	stats.AddMissingUsage("openai")
+	stats.AddTokenUsage("unknown", tokenusage.Usage{Input: 999, Output: 999})
+	stats.AddMissingUsage("unknown")
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+	pd := extractProxyData(t, rec.Body.String())
+
+	wantTotal := tokenDataItem{
+		TotalTokens:          180,
+		InputTokens:          150,
+		OutputTokens:         30,
+		CacheReadTokens:      45,
+		CacheWriteTokens:     9,
+		ReasoningTokens:      11,
+		MissingUsageRequests: 1,
+	}
+	if pd.Tokens.Total != wantTotal {
+		t.Fatalf("total tokens = %+v, want %+v", pd.Tokens.Total, wantTotal)
+	}
+	wantOpenAI := tokenDataItem{
+		TotalTokens:          120,
+		InputTokens:          100,
+		OutputTokens:         20,
+		CacheReadTokens:      30,
+		CacheWriteTokens:     5,
+		ReasoningTokens:      8,
+		MissingUsageRequests: 1,
+	}
+	if pd.Tokens.OpenAI != wantOpenAI {
+		t.Fatalf("OpenAI tokens = %+v, want %+v", pd.Tokens.OpenAI, wantOpenAI)
+	}
+	wantAnthropic := tokenDataItem{
+		TotalTokens:      60,
+		InputTokens:      50,
+		OutputTokens:     10,
+		CacheReadTokens:  15,
+		CacheWriteTokens: 4,
+		ReasoningTokens:  3,
+	}
+	if pd.Tokens.Anthropic != wantAnthropic {
+		t.Fatalf("Anthropic tokens = %+v, want %+v", pd.Tokens.Anthropic, wantAnthropic)
+	}
+}
+
+func TestHandler_TokenSection(t *testing.T) {
+	h, _ := newTestHandler("1.0.0")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+
+	body := rec.Body.String()
+	for _, marker := range []string{
+		"Token 用量",
+		`id="token-total"`,
+		`id="token-input"`,
+		`id="token-output"`,
+		`id="token-missing"`,
+		`id="token-row-total"`,
+		`id="token-row-openai"`,
+		`id="token-row-anthropic"`,
+		"function formatCount(value)",
+	} {
+		if !strings.Contains(body, marker) {
+			t.Errorf("dashboard HTML missing %q", marker)
+		}
+	}
+}
+
+func extractProxyData(t *testing.T, body string) proxyData {
+	t.Helper()
+	const prefix = "window.__PROXY_DATA__ = "
+	idx := strings.Index(body, prefix)
+	if idx == -1 {
+		t.Fatal("window.__PROXY_DATA__ not found in response body")
+	}
+	jsonStart := idx + len(prefix)
+	jsonEnd := strings.Index(body[jsonStart:], ";")
+	if jsonEnd == -1 {
+		t.Fatal("could not find closing semicolon after __PROXY_DATA__")
+	}
+	var pd proxyData
+	if err := json.Unmarshal([]byte(body[jsonStart:jsonStart+jsonEnd]), &pd); err != nil {
+		t.Fatalf("failed to unmarshal injected JSON: %v", err)
+	}
+	return pd
 }

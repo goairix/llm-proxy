@@ -322,6 +322,8 @@
     .rl-table td { color: var(--text-h2); font-weight: 500; }
     .rl-table tr:last-child td { border-bottom: none; }
 
+    .table-scroll { overflow-x: auto; }
+
     /* ─── Usage Guide ────────────────────────────────────────────── */
     .usage-block { margin-bottom: 20px; }
     .usage-block:last-child { margin-bottom: 0; }
@@ -589,6 +591,44 @@
           <div class="label">响应流量</div>
           <div class="value text-sm" id="stat-resp-bytes">—</div>
         </div>
+      </div>
+    </div>
+
+    <!-- Token 用量 -->
+    <div class="card">
+      <h2>Token 用量<span style="font-size:0.72rem;font-weight:400;color:var(--text-muted);margin-left: -5px;">（自启动以来）</span></h2>
+      <div class="stats-grid" style="margin-bottom:16px">
+        <div class="stat-item">
+          <div class="label">总 Token</div>
+          <div class="value" id="token-total">—</div>
+        </div>
+        <div class="stat-item">
+          <div class="label">输入 Token</div>
+          <div class="value" id="token-input">—</div>
+        </div>
+        <div class="stat-item">
+          <div class="label">输出 Token</div>
+          <div class="value" id="token-output">—</div>
+        </div>
+        <div class="stat-item">
+          <div class="label">缺失 Usage 请求</div>
+          <div class="value" id="token-missing">—</div>
+        </div>
+      </div>
+      <div class="table-scroll">
+        <table class="rl-table">
+          <thead>
+            <tr>
+              <th>分组</th><th>总 Token</th><th>输入</th><th>输出</th>
+              <th>缓存读取</th><th>缓存写入</th><th>推理</th><th>缺失 Usage</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr id="token-row-total"><td>总计</td><td id="token-total-total">—</td><td id="token-total-input">—</td><td id="token-total-output">—</td><td id="token-total-cache-read">—</td><td id="token-total-cache-write">—</td><td id="token-total-reasoning">—</td><td id="token-total-missing">—</td></tr>
+            <tr id="token-row-openai"><td>OpenAI</td><td id="token-openai-total">—</td><td id="token-openai-input">—</td><td id="token-openai-output">—</td><td id="token-openai-cache-read">—</td><td id="token-openai-cache-write">—</td><td id="token-openai-reasoning">—</td><td id="token-openai-missing">—</td></tr>
+            <tr id="token-row-anthropic"><td>Anthropic</td><td id="token-anthropic-total">—</td><td id="token-anthropic-input">—</td><td id="token-anthropic-output">—</td><td id="token-anthropic-cache-read">—</td><td id="token-anthropic-cache-write">—</td><td id="token-anthropic-reasoning">—</td><td id="token-anthropic-missing">—</td></tr>
+          </tbody>
+        </table>
       </div>
     </div>
 
@@ -937,6 +977,9 @@ console.log(res.content);</pre>
         var rest = s.replace(/^\d+h/, '');
         return days + 'd ' + (rem > 0 ? rem + 'h' : '') + rest;
       }
+      function formatCount(value) {
+        return Number(value || 0).toLocaleString('zh-CN');
+      }
 
       // 运行状态（超过 24h 换算为天）
       setText('stat-uptime',     fmtUptime(data.uptime));
@@ -961,6 +1004,29 @@ console.log(res.content);</pre>
       setText('stat-avg-latency', s.avg_latency_ms != null ? s.avg_latency_ms + ' ms' : '—');
       setText('stat-req-bytes',   fmtBytes(s.req_bytes));
       setText('stat-resp-bytes',  fmtBytes(s.resp_bytes));
+
+      // Token 用量
+      var tokens = data.tokens || {};
+      var tokenTotal = tokens.total || {};
+      setText('token-total',   formatCount(tokenTotal.total_tokens));
+      setText('token-input',   formatCount(tokenTotal.input_tokens));
+      setText('token-output',  formatCount(tokenTotal.output_tokens));
+      setText('token-missing', formatCount(tokenTotal.missing_usage_requests));
+      [
+        ['total', tokens.total || {}],
+        ['openai', tokens.openai || {}],
+        ['anthropic', tokens.anthropic || {}],
+      ].forEach(function (entry) {
+        var prefix = 'token-' + entry[0] + '-';
+        var item = entry[1];
+        setText(prefix + 'total',       formatCount(item.total_tokens));
+        setText(prefix + 'input',       formatCount(item.input_tokens));
+        setText(prefix + 'output',      formatCount(item.output_tokens));
+        setText(prefix + 'cache-read',  formatCount(item.cache_read_tokens));
+        setText(prefix + 'cache-write', formatCount(item.cache_write_tokens));
+        setText(prefix + 'reasoning',   formatCount(item.reasoning_tokens));
+        setText(prefix + 'missing',     formatCount(item.missing_usage_requests));
+      });
 
       // 限流配置
       var rl = data.rate_limit || {};

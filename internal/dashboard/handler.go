@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/goairix/llm-proxy/internal/config"
+	"github.com/goairix/llm-proxy/internal/tokenusage"
 )
 
 //go:embed web/index.html
@@ -31,6 +32,64 @@ type Stats struct {
 	// Bandwidth bytes
 	ReqBytes  atomic.Int64
 	RespBytes atomic.Int64
+
+	Tokens TokenCounters
+}
+
+// TokenStats holds atomic counters for one provider group.
+type TokenStats struct {
+	Input      atomic.Int64
+	Output     atomic.Int64
+	CacheRead  atomic.Int64
+	CacheWrite atomic.Int64
+	Reasoning  atomic.Int64
+	Missing    atomic.Int64
+}
+
+// TokenCounters groups total and per-provider token counters.
+type TokenCounters struct {
+	Total     TokenStats
+	OpenAI    TokenStats
+	Anthropic TokenStats
+}
+
+// AddTokenUsage adds one valid usage result to total and provider counters.
+func (s *Stats) AddTokenUsage(provider string, usage tokenusage.Usage) {
+	providerStats := s.tokenStats(provider)
+	if providerStats == nil {
+		return
+	}
+	addTokenUsage(&s.Tokens.Total, usage)
+	addTokenUsage(providerStats, usage)
+}
+
+// AddMissingUsage records one successful eligible request without usage data.
+func (s *Stats) AddMissingUsage(provider string) {
+	providerStats := s.tokenStats(provider)
+	if providerStats == nil {
+		return
+	}
+	s.Tokens.Total.Missing.Add(1)
+	providerStats.Missing.Add(1)
+}
+
+func (s *Stats) tokenStats(provider string) *TokenStats {
+	switch provider {
+	case "openai":
+		return &s.Tokens.OpenAI
+	case "anthropic":
+		return &s.Tokens.Anthropic
+	default:
+		return nil
+	}
+}
+
+func addTokenUsage(stats *TokenStats, usage tokenusage.Usage) {
+	stats.Input.Add(usage.Input)
+	stats.Output.Add(usage.Output)
+	stats.CacheRead.Add(usage.CacheRead)
+	stats.CacheWrite.Add(usage.CacheWrite)
+	stats.Reasoning.Add(usage.Reasoning)
 }
 
 // Handler serves the dashboard HTML page.
@@ -55,12 +114,13 @@ func NewHandler(stats *Stats, cfg config.RateLimitConfig, version, baseURL strin
 
 // proxyData is the JSON payload injected into the HTML page.
 type proxyData struct {
-	Uptime     string        `json:"uptime"`
-	StartTime  string        `json:"start_time"`
-	Version    string        `json:"version"`
-	BaseURL    string        `json:"base_url"`
-	Stats      statsData     `json:"stats"`
-	RateLimit  rateLimitData `json:"rate_limit"`
+	Uptime    string        `json:"uptime"`
+	StartTime string        `json:"start_time"`
+	Version   string        `json:"version"`
+	BaseURL   string        `json:"base_url"`
+	Stats     statsData     `json:"stats"`
+	RateLimit rateLimitData `json:"rate_limit"`
+	Tokens    tokenData     `json:"tokens"`
 }
 
 type statsData struct {
@@ -79,6 +139,22 @@ type rateLimitData struct {
 	Enabled           bool    `json:"enabled"`
 	RequestsPerSecond float64 `json:"requests_per_second"`
 	Burst             int     `json:"burst"`
+}
+
+type tokenData struct {
+	Total     tokenDataItem `json:"total"`
+	OpenAI    tokenDataItem `json:"openai"`
+	Anthropic tokenDataItem `json:"anthropic"`
+}
+
+type tokenDataItem struct {
+	TotalTokens          int64 `json:"total_tokens"`
+	InputTokens          int64 `json:"input_tokens"`
+	OutputTokens         int64 `json:"output_tokens"`
+	CacheReadTokens      int64 `json:"cache_read_tokens"`
+	CacheWriteTokens     int64 `json:"cache_write_tokens"`
+	ReasoningTokens      int64 `json:"reasoning_tokens"`
+	MissingUsageRequests int64 `json:"missing_usage_requests"`
 }
 
 // ServeHTTP serves the dashboard page.
@@ -118,6 +194,11 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, _ *http.Request) {
 			RequestsPerSecond: h.cfg.Default.RequestsPerSecond,
 			Burst:             h.cfg.Default.Burst,
 		},
+		Tokens: tokenData{
+			Total:     snapshotTokenStats(&h.stats.Tokens.Total),
+			OpenAI:    snapshotTokenStats(&h.stats.Tokens.OpenAI),
+			Anthropic: snapshotTokenStats(&h.stats.Tokens.Anthropic),
+		},
 	}
 
 	jsonBytes, err := json.Marshal(data)
@@ -131,4 +212,18 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, _ *http.Request) {
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_, _ = w.Write([]byte(page))
+}
+
+func snapshotTokenStats(stats *TokenStats) tokenDataItem {
+	input := stats.Input.Load()
+	output := stats.Output.Load()
+	return tokenDataItem{
+		TotalTokens:          input + output,
+		InputTokens:          input,
+		OutputTokens:         output,
+		CacheReadTokens:      stats.CacheRead.Load(),
+		CacheWriteTokens:     stats.CacheWrite.Load(),
+		ReasoningTokens:      stats.Reasoning.Load(),
+		MissingUsageRequests: stats.Missing.Load(),
+	}
 }
