@@ -30,3 +30,7 @@ go.work.sum
 
 .DS_Store
 
+# Vibe Coding
+.superpowers
+.claude
+.agent
