@@ -1,149 +1,130 @@
-# Multi-Provider Unified LLM Gateway — DDD Architecture Design
+# 多供应商统一大模型网关——DDD 架构设计
 
-**Date:** 2026-08-24
+**日期：** 2026-08-24
 
-**Status:** Approved in brainstorming; pending written-spec review
+**状态：** 设计讨论已批准，待书面规格复核
 
-**Repository:** `github.com/goairix/llm-proxy`
+**仓库：** `github.com/goairix/llm-proxy`
 
-## 1. Context
+## 1. 文档约定
 
-The current project is a transparent reverse proxy with two fixed public route families:
+本项目面向团队的设计文档、实施计划、Dashboard 文案和运维说明默认使用中文。代码标识符、协议字段、标准名称以及没有准确中文译法的技术术语保留英文。
 
-- `/openai/*` forwards to the configured OpenAI-compatible upstream.
-- `/anthropic/*` forwards to the configured Anthropic-compatible upstream.
+本文是总体架构规格。系统按阶段交付，每个阶段实施前还要有独立的细化设计和实施计划。
 
-That path deliberately performs no protocol conversion. Its middleware order, SSE behavior, API-key forwarding, rate limiting, token observation, logging, and OpenTelemetry semantics are existing compatibility contracts.
+## 2. 背景
 
-The new product adds a separate unified model gateway. It accepts OpenAI-compatible and Anthropic-compatible client requests, routes logical models across multiple provider deployments, converts request and response protocols, and evolves into a self-hosted multi-tenant platform. The existing transparent proxy remains available and behaviorally unchanged.
+当前项目是一套透明反向代理：
 
-## 2. Goals
+- `/openai/*` 转发到配置的 OpenAI 或 OpenAI-Compatible 上游。
+- `/anthropic/*` 转发到配置的 Anthropic 上游。
 
-1. Preserve the existing transparent proxy routes and behavior.
-2. Add SDK-compatible root endpoints:
-   - `POST /v1/chat/completions`
-   - `POST /v1/messages`
-3. Support OpenAI, Anthropic, Gemini, and generic OpenAI-compatible upstream connectors in the first gateway milestone.
-4. Normalize text, image input, tool calls, structured output, streaming, stop reasons, and usage without silently dropping unsupported semantics.
-5. Support logical model aliases and explicit `provider/model` selection.
-6. Provide weighted routing, priority fallback, bounded retries, passive health tracking, and circuit breaking.
-7. Authenticate gateway clients with virtual keys and manage upstream credentials server-side.
-8. Run as a stateless, horizontally scalable data plane in a single region.
-9. Evolve into a PostgreSQL-backed multi-tenant control plane with organization, project, RBAC, audit, budget, usage, and cost domains.
-10. Organize the entire codebase with DDD and Clean Architecture, following the broad structure of `/Users/dysodeng/project/go/app-service` while enforcing stricter dependency boundaries.
+这条链路不做协议转换。现有中间件顺序、SSE 透传、上游 API Key 传递、限流、Token 观察、日志和 OpenTelemetry 语义都是必须保持的兼容契约。
 
-## 3. Non-goals
+新产品在同一进程中增加一条独立的统一模型网关链路。它接收兼容 OpenAI 和 Anthropic 的客户端请求，在多个供应商部署之间路由逻辑模型，完成请求与响应的双向协议转换，并逐步演进为可自托管的多租户平台。现有透明代理继续存在，行为不变。
 
-- Changing the behavior or public paths of the existing transparent proxy.
-- Supporting OpenAI Responses API in the first gateway milestone.
-- Supporting audio, files, batch jobs, payments, account top-ups, invoices, or subscription plans in the initial program.
-- Standardizing every provider-specific capability into the common protocol.
-- Dynamically loading Go plugins or WASM connectors in the first milestone.
-- Multi-region active-active deployment in the initial architecture.
-- Fetching remote image URLs inside the gateway when an upstream requires inline image bytes.
-- Logging prompts, model output, tool arguments, API keys, or provider secrets.
+## 3. 目标
 
-## 4. Selected architecture
+1. 保持现有透明代理的公开路径和行为。
+2. 新增 `POST /v1/chat/completions` 和 `POST /v1/messages`。
+3. 第一阶段支持 OpenAI、Anthropic、Gemini 和通用 OpenAI-Compatible 四类上游连接器。
+4. 统一表达文本、图片输入、工具调用、结构化输出、流式事件、停止原因和 Usage；不静默丢弃不支持的语义。
+5. 同时支持逻辑模型别名和显式 `provider/model` 选择。
+6. 支持加权路由、优先级故障转移、有限重试、被动健康状态和熔断。
+7. 客户端使用网关虚拟 Key；上游凭据由服务端管理。
+8. 数据面可在单区域内以无状态多副本方式水平扩展。
+9. 最终提供基于 PostgreSQL 的多租户控制面，包括组织、项目、RBAC、审计、预算、Usage 和成本。
+10. 整个代码库采用 DDD 与 Clean Architecture，整体组织参考 `/Users/dysodeng/project/go/app-service`，同时执行更严格的依赖边界。
 
-The selected approach is a **typed canonical semantic core in a modular monolith**, bounded by DDD layers and outbound ports.
+## 4. 非目标
+
+- 改变现有透明代理的路径或语义。
+- 第一阶段支持 OpenAI Responses API。
+- 第一阶段支持音频、文件、Batch、支付、充值、发票或订阅套餐。
+- 把所有供应商私有能力都提升为统一公共字段。
+- 第一阶段动态加载 Go Plugin 或 WASM 连接器。
+- 初始架构实现多区域主动—主动部署。
+- 当上游只接受内联图片时，由网关主动下载远程图片 URL。
+- 记录 Prompt、模型输出、工具参数、API Key 或供应商 Secret。
+
+## 5. 总体架构
+
+采用“模块化单体 + 类型化统一语义内核 + DDD 分层”：
 
 ```text
-Client
-  ├─ /openai/*, /anthropic/*
-  │    └─ existing transparent proxy pipeline
+客户端
+  ├─ /openai/*、/anthropic/*
+  │    └─ 现有透明代理链路
   │
-  └─ /v1/chat/completions, /v1/messages
-       └─ protocol ingress adapter
-          └─ inference application service
-             ├─ virtual-key authentication and access policy
-             ├─ capability validation
-             ├─ model resolution and route planning
-             ├─ quota reservation
-             ├─ provider connector attempts
-             └─ usage/cost metering
-                └─ canonical response or event stream
-                   └─ protocol egress adapter
+  └─ /v1/chat/completions、/v1/messages
+       └─ 入口协议适配器
+          └─ 推理应用服务
+             ├─ 虚拟 Key 认证与访问策略
+             ├─ 能力校验
+             ├─ 模型解析与路由计划
+             ├─ 配额预留
+             ├─ 供应商连接器调用
+             └─ Usage 与成本计量
+                └─ 统一响应或类型化事件流
+                   └─ 出口协议适配器
 ```
 
-The canonical model is not an untyped universal JSON document. It consists of stable, typed common semantics plus explicitly namespaced provider extensions.
+统一语义模型不是无类型的“万能 JSON”，而是稳定、类型化的公共语义加显式命名空间的供应商扩展。
 
-## 5. DDD and Clean Architecture
+## 6. DDD 与 Clean Architecture
 
-### 5.1 Top-level layers
+### 6.1 顶层分层与依赖
 
 ```text
 internal/
-├── interfaces/       # HTTP/CLI adapters, protocol DTOs, handlers, router, middleware
-├── application/      # use cases, commands/results, orchestration, application ports
-├── domain/           # aggregates, value objects, domain services, ports, repositories
-├── infrastructure/   # HTTP server, providers, persistence, Redis, secrets, config, OTel
-└── di/               # Wire sets, modules, and composition root
+├── interfaces/       # HTTP/CLI、协议 DTO、Handler、Router、Middleware
+├── application/      # 用例、Command/Result、流程编排、应用端口
+├── domain/           # 聚合、值对象、领域服务、端口、仓储接口
+├── infrastructure/   # Server、供应商、持久化、Redis、Secret、配置、OTel
+└── di/               # Wire 模块与唯一组装根
 ```
 
-Dependency direction is fixed:
+依赖方向固定为：
 
 ```text
 interfaces → application → domain
-infrastructure → domain/application ports
-di → all layers for assembly only
+infrastructure → 实现 domain/application 定义的端口
+di → 仅在最终装配时同时认识各层
 ```
 
-The domain layer may use the Go standard library and intentionally selected identity/value libraries. It must not import provider SDKs, `net/http`, GORM, Redis, Viper, OpenTelemetry, Zap, or any `infrastructure` package. Infrastructure entities do not double as domain aggregates.
+领域层只允许依赖 Go 标准库和经过明确选择的基础值类型库，禁止导入供应商 SDK、`net/http`、GORM、Redis、Viper、OpenTelemetry、Zap 或任何 `infrastructure` 包。数据库 Entity 不能直接充当领域 Aggregate。
 
-Google Wire is used under `internal/di` in the same style as the reference project. Generated Wire code is checked in and regenerated only when the dependency graph changes.
+依赖注入沿用参考项目的 Google Wire 方式。生成代码纳入版本管理，仅在依赖图变化时重新生成。
 
-### 5.2 Bounded contexts
+### 6.2 限界上下文
 
-#### Inference
+#### 推理域 `inference`
 
-Owns canonical message/content types, tool definitions and calls, structured-output constraints, generation options, stop reasons, normalized usage, provider attempts, and typed stream events.
+负责统一消息、内容块、工具定义与调用、结构化输出约束、生成参数、停止原因、Usage、供应商尝试和类型化流式事件。核心类型包括 `InferenceRequest`、`Message`、`ContentBlock`、`ToolDefinition`、`InferenceResponse`、`StreamEvent`、`Usage` 和 `AttemptResult`。
 
-Key types include:
+供应商连接器端口属于该领域，因为其契约完全由推理领域类型表达。
 
-- `InferenceRequest`
-- `Message`
-- `ContentBlock`
-- `ToolDefinition`
-- `ToolChoice`
-- `OutputConstraint`
-- `InferenceResponse`
-- `StreamEvent`
-- `Usage`
-- `AttemptResult`
+#### 模型目录域 `modelcatalog`
 
-The provider connector port belongs to this context because its contract is expressed entirely in inference domain types.
+负责供应商类型、供应商部署、上游模型、模型别名、能力集合、路由目标、路由策略和不可变 `RoutePlan`。
 
-#### Model Catalog
+#### 访问控制域 `access`
 
-Owns provider kinds, provider deployments, upstream model identities, model aliases, capability sets, route targets, route policies, and immutable route plans.
+负责 Organization、Project、虚拟 Key、角色、项目模型策略和授权判断。初始自托管版本使用平台级引导组织和项目，但应用与领域契约从一开始携带组织、项目上下文。
 
-Key aggregates and values include:
+#### 凭据域 `credential`
 
-- `ProviderDeployment`
-- `ModelDefinition`
-- `ModelAlias`
-- `CapabilitySet`
-- `RoutePolicy`
-- `RouteTarget`
-- `RoutePlan`
+负责凭据元数据、平台或租户作用域、供应商绑定、Secret 引用、启停状态和轮换版本。
 
-#### Access
+#### 计量域 `metering`
 
-Owns organizations, projects, virtual keys, roles, project model policy, and authorization decisions. The initial self-hosted milestone uses a platform scope but preserves organization and project identity in contracts.
+负责不可变 Usage 事实、尝试级成本、版本化价格、配额预留、项目预算、对账和成本 Ledger。
 
-#### Credential
+#### 共享内核 `shared`
 
-Owns credential metadata, platform versus tenant scope, provider binding, secret references, activation state, and rotation version. It never owns or exposes provider SDK objects.
+只保存稳定的跨域 ID、领域错误基础类型、时钟和领域事件基础类型。通用工具函数不能因为方便而进入共享内核。
 
-#### Metering
-
-Owns immutable usage facts, attempt-level cost, versioned pricing, quota reservations, project budgets, reconciliation, and cost ledger entries.
-
-#### Shared kernel
-
-Contains only stable cross-context IDs, domain error primitives, clocks, and domain-event primitives. Convenience helpers do not belong in the shared kernel.
-
-### 5.3 Target package layout
+### 6.3 目标目录
 
 ```text
 internal/
@@ -184,68 +165,54 @@ internal/
 └── di/{modules,provider}/
 ```
 
-Directories are created when their phase begins; empty architecture scaffolding is not added in advance.
+目录随对应阶段创建，不提前生成空目录和无用途脚手架。
 
-### 5.4 Existing-package migration
+### 6.4 现有包迁移
 
-| Current package | Target responsibility |
+| 当前包 | 目标职责 |
 | --- | --- |
 | `internal/proxy` | `internal/infrastructure/proxy` |
-| `internal/middleware` | HTTP concerns to `interfaces/http/middleware`; technical backends to infrastructure |
+| `internal/middleware` | HTTP 部分进入 `interfaces/http/middleware`；技术后端进入 infrastructure |
 | `internal/config` | `internal/infrastructure/config` |
 | `internal/observability` | `internal/infrastructure/observability` |
 | `internal/logger` | `internal/infrastructure/logger` |
-| `internal/dashboard` | handler/UI under `interfaces/http/handler/dashboard`; read model outside domain |
-| `internal/tokenusage` | transparent-proxy observation under infrastructure; new gateway usage under `domain/metering` and connector adapters |
-| `internal/server` | router under interfaces and server lifecycle under `infrastructure/server/http` |
+| `internal/dashboard` | Handler/UI 进入 `interfaces/http/handler/dashboard`；读模型不进入领域层 |
+| `internal/tokenusage` | 透明代理观察器进入 infrastructure；新网关 Usage 进入计量域与连接器适配器 |
+| `internal/server` | Router 进入 interfaces；Server 生命周期进入 `infrastructure/server/http` |
 
-Moving existing code is a refactor, not a behavior change. Characterization tests lock middleware order, routes, SSE flushing, token semantics, health checks, OTel propagation, shutdown order, logging, and rate limiting before packages move.
+移动现有代码属于重构，不得改变行为。移动前先用特征测试锁定中间件顺序、路由、SSE Flush、Token 语义、健康检查、OTel 传播、关闭顺序、日志和限流。
 
-The transparent proxy is a technical adapter, not a bounded context. It does not pass through the inference canonical model.
+透明代理是技术适配器，不虚构为业务领域，也不经过推理统一语义模型。
 
-## 6. Public HTTP contracts
+## 7. HTTP 公开契约
 
-### 6.1 Existing transparent contracts
+### 7.1 现有透明代理
 
-- `/openai/*` retains upstream key passthrough and OpenAI path rewriting.
-- `/anthropic/*` retains upstream key passthrough and Anthropic path rewriting.
-- `/healthz`, `/readyz`, and the existing dashboard retain their current semantics.
+- `/openai/*` 保持上游 Key 透传和 OpenAI 路径重写。
+- `/anthropic/*` 保持上游 Key 透传和 Anthropic 路径重写。
+- `/healthz`、`/readyz` 和现有 Dashboard 保持当前语义。
 
-### 6.2 Unified gateway contracts
+### 7.2 新统一网关
 
-- `POST /v1/chat/completions` implements OpenAI Chat Completions-compatible JSON and SSE.
-- `POST /v1/messages` implements Anthropic Messages-compatible JSON and SSE.
-- `/v1/chat/completions` reads the virtual gateway key from `Authorization: Bearer <key>`.
-- `/v1/messages` reads the virtual gateway key from `x-api-key` and accepts Bearer authentication as a documented gateway extension. It validates `anthropic-version` against the ingress adapter's supported versions.
-- Neither endpoint interprets the virtual key as an upstream provider credential or forwards it upstream.
-- Official SDKs must work by changing only the base URL and gateway key, subject to the supported capability matrix.
-- Unknown public fields are rejected unless the ingress protocol explicitly permits them or they occur inside the documented provider-extension namespace.
+- `POST /v1/chat/completions` 提供兼容 OpenAI Chat Completions 的 JSON 与 SSE。
+- `POST /v1/messages` 提供兼容 Anthropic Messages 的 JSON 与 SSE。
+- Chat Completions 从 `Authorization: Bearer <key>` 读取虚拟 Key。
+- Messages 优先从 `x-api-key` 读取虚拟 Key，同时把 Bearer 认证作为明确的网关扩展；`anthropic-version` 必须属于入口适配器支持的版本。
+- 虚拟 Key 绝不当作供应商凭据，也不转发到上游。
+- 在能力矩阵允许的范围内，官方 SDK 只需修改 Base URL 和 API Key。
+- 未知公共字段默认拒绝；入口协议明确允许的字段和已登记的供应商扩展命名空间除外。
 
-The OpenAI and Anthropic DTOs remain in the interface layer. Neither DTO is used as a domain model or passed directly to a provider connector.
+OpenAI 与 Anthropic DTO 只存在于接口层，不能充当领域模型，也不能直接传给供应商连接器。
 
-## 7. Canonical inference model
+## 8. 统一推理语义
 
-### 7.1 Request semantics
+### 8.1 请求
 
-The common request supports:
+统一请求支持 system/developer 指令及顺序语义、user/assistant 消息、文本、内联图片、目标上游可直接接受的图片 URL、工具定义与调用、工具结果、并行工具、JSON/JSON Schema 输出、常用采样参数、流式标记、Metadata、逻辑模型标识和供应商扩展。
 
-- system/developer guidance with preserved ordering semantics;
-- user and assistant messages;
-- text blocks;
-- inline image blocks and provider-passable image URLs;
-- tool definitions, tool choice, tool calls, and tool results;
-- parallel tool calls where supported;
-- JSON and JSON Schema output constraints;
-- temperature, top-p, maximum output, stop sequences, and seed when supported;
-- stream mode and client metadata;
-- a requested logical model identity;
-- namespaced provider options.
+当“字段缺失”和“显式提供默认值”会影响上游行为时，领域类型必须保留两者差异。
 
-The model records whether a value was absent or explicitly provided when that distinction affects provider defaults.
-
-### 7.2 Provider extensions
-
-Provider-specific fields live in a namespaced map such as:
+### 8.2 供应商扩展
 
 ```json
 {
@@ -256,386 +223,225 @@ Provider-specific fields live in a namespaced map such as:
 }
 ```
 
-Each connector owns a versioned schema for its namespace. Extensions are accepted only when the selected or candidate route targets match that provider kind and the caller is authorized. Arbitrary header injection, arbitrary URL fields, and cross-provider forwarding are forbidden.
+每个连接器维护自己带版本的扩展 Schema。只有路由目标属于对应供应商且调用方有权限时才接受扩展。禁止任意 Header 注入、任意 URL 字段以及跨供应商转发扩展。
 
-### 7.3 Typed stream events
+### 8.3 类型化事件流
 
-Provider responses are decoded into a transport-independent event stream:
+供应商响应解码为 `ResponseStart`、`ContentBlockStart`、`TextDelta`、`ToolCallStart`、`ToolArgumentsDelta`、`ContentBlockStop`、`UsageUpdate`、`ResponseFinish` 和 `StreamError`。
 
-- `ResponseStart`
-- `ContentBlockStart`
-- `TextDelta`
-- `ToolCallStart`
-- `ToolArgumentsDelta`
-- `ContentBlockStop`
-- `UsageUpdate`
-- `ResponseFinish`
-- `StreamError`
+事件保留内容块索引、工具调用 ID、统一停止原因、统一 Usage，以及审计或诊断需要的供应商原始枚举值。供应商 SDK 类型不能越过连接器边界。
 
-Events preserve block index, tool-call ID, normalized stop reason, normalized usage, and a connector-private original value where required for audit/debugging. Provider SDK types never cross the connector boundary.
+事件流采用拉取或迭代器接口，让取消与背压自然向上游传播。连接器不能接收 `http.ResponseWriter`。
 
-The event stream is pull-based or iterator-based so cancellation and backpressure propagate naturally. Connectors never receive an `http.ResponseWriter`.
+## 9. 请求生命周期
 
-## 8. Request lifecycle
+1. HTTP 入口适配器校验协议请求并生成应用 Command。
+2. 推理应用服务认证虚拟 Key，得到组织、项目和策略上下文。
+3. 协议映射器生成 `InferenceRequest`。
+4. 模型解析器处理逻辑别名或 `provider/model`。
+5. 过滤能力、供应商扩展、权限和预算不兼容的目标。
+6. 配额服务预留请求数、Token 和预计成本。
+7. 路由器选择目标并调用连接器。
+8. 连接器编码原生请求，将上游 JSON/SSE 解码为统一事件。
+9. 出口适配器把统一事件编码回客户端协议。
+10. 尝试级 Usage 和成本事件通过可靠计量链路异步对账与持久化。
 
-1. The HTTP ingress adapter validates the protocol-specific request and produces an application command.
-2. The inference application service authenticates the virtual key and obtains tenant/project/policy context.
-3. The protocol mapper builds an `InferenceRequest`.
-4. The model resolver resolves a logical alias or explicit `provider/model` selector.
-5. Capability, provider-extension, access, and budget checks filter invalid targets.
-6. The quota service reserves estimated request, token, and cost capacity.
-7. The router selects an eligible target and invokes its provider connector.
-8. The connector encodes the native request and decodes JSON or SSE into canonical response events.
-9. The egress adapter encodes canonical response events into the original client protocol.
-10. Attempt-level usage and cost events are reconciled and persisted asynchronously through the durable metering path.
+客户端取消、Context Deadline、背压和 Trace Context 必须贯穿整个链路。
 
-Client cancellation, context deadlines, backpressure, and trace context propagate through every step.
+## 10. 供应商连接器与能力矩阵
 
-## 9. Provider connector contract
+连接器必须声明或实现供应商类型、连接器版本、能力集合、扩展 Schema 版本、请求编码、普通/流式响应解码、错误分类、Usage 归一化、认证 Header 注入和可选健康观察钩子。
 
-A connector declares:
+首批内置连接器为 OpenAI、Anthropic、Gemini 和通用 OpenAI-Compatible，通过 Wire Provider Set 注册。增加内置连接器不得修改入口协议或推理应用用例。未来可增加带版本的外部 Adapter RPC 协议；第一阶段不支持运行时 Plugin。
 
-- provider kind and connector version;
-- supported capabilities;
-- supported provider-extension schema version;
-- request encoder;
-- non-stream response decoder;
-- stream decoder;
-- error classifier;
-- usage normalizer;
-- authentication/header injector;
-- optional health observation hooks.
+能力不能仅凭供应商名称推断。模型目标显式声明文本、URL/内联图片、工具、并行工具、文本流、工具参数增量流、JSON、JSON Schema、Usage 和供应商扩展能力。
 
-Initial built-in connectors are OpenAI, Anthropic, Gemini, and generic OpenAI-compatible. They are compiled into the binary and registered through Wire provider sets. Adding a built-in connector requires no change to ingress protocols or the inference use case.
+入口映射器从请求推导所需能力。路由排除不能满足全部公共语义的目标；没有合格目标时返回入口协议原生错误。消息内容块、工具、输出约束和扩展都不得静默删除。
 
-A future external-adapter protocol may implement the same semantic port over a versioned RPC boundary. Runtime Go plugins and WASM are not part of the first architecture.
+如果目标需要网关下载图片 URL 再转成内联数据，该目标在第一阶段视为不合格。
 
-## 10. Capabilities
+## 11. 模型解析与路由
 
-Capabilities are explicit values, not inferred from a provider name. A model target may declare support for:
+### 11.1 模型选择
 
-- text input/output;
-- image input by URL and/or inline data;
-- tools and parallel tools;
-- streaming text;
-- streaming tool arguments;
-- JSON output;
-- JSON Schema output;
-- usage in normal and streaming responses;
-- provider-specific extensions.
+- `fast-chat` 等逻辑名称通过不可变、带版本的模型目录快照解析。
+- `provider/model` 在第一个 `/` 处分割，后半部分是完整上游模型名，因此模型名本身仍可包含 `/`。
+- 显式选择仍必须经过权限、能力、预算、凭据和熔断检查。
+- 同一供应商类型可有多个合格部署。
+- 响应 `model` 保持客户端请求的逻辑名称；真实目标只进入授权诊断、日志、审计和 Trace。
 
-The ingress mapper derives required capabilities from each request. Routing removes targets that cannot satisfy every required common capability. The gateway returns a protocol-native capability error if no eligible target remains. It never silently deletes a message block, tool definition, output constraint, or provider option.
+每个路由目标包含供应商部署 ID、上游模型 ID、凭据引用与作用域、优先级、权重、单次超时、能力、可重试错误策略、价格版本和可选租户限制。
 
-If an image URL would need to be downloaded and converted to inline bytes for a target, that target is ineligible in the first milestone. The client must supply inline image data or select a URL-capable target.
+### 11.2 选择顺序
 
-## 11. Model resolution and routing
+1. 组织与项目授权。
+2. 请求能力。
+3. 供应商扩展兼容性。
+4. 配额与预算。
+5. 停用与熔断状态。
+6. 在最高可用优先级组内按权重选择。
 
-### 11.1 Model selection
+随机源与时钟必须可注入，以便确定性测试。
 
-- A logical name such as `fast-chat` resolves through an immutable, versioned model catalog snapshot.
-- An explicit `provider/model` selector splits at the first `/`, constrains the provider kind and upstream model, and still passes authorization, capability, budget, credential, and circuit checks. The upstream model portion may itself contain `/` characters.
-- Multiple provider deployments of the same provider kind may remain eligible after explicit selection.
-- The response `model` field preserves the client-requested logical identity. Actual target identity is available only in authorized debugging, logs, audit, and traces.
+### 11.3 重试与故障转移
 
-### 11.2 Route targets
+- 总 Deadline 和最大尝试次数共同限制重试。
+- 连接失败、指定超时、429 以及选定的 5xx/过载错误可以重试。
+- 认证、授权、参数校验等不可重试 4xx 不得重试。
+- 只有 `Retry-After` 落在剩余 Deadline 内时才遵守。
+- 主要通过真实尝试维护被动健康与熔断；主动探测不得产生付费模型调用。
+- 写出第一个客户端事件后立即锁定上游，禁止重试和故障转移。
+- 不得为迁就备用目标而篡改供应商扩展。
 
-A target contains:
+一次客户端调用对应一个逻辑请求，但可有多个尝试记录；前序失败尝试产生的可识别成本也要记账。
 
-- provider deployment ID;
-- upstream model ID;
-- credential reference and scope;
-- priority and weight;
-- per-attempt timeout;
-- enabled capabilities;
-- retry classification policy;
-- price version;
-- optional tenant/project restrictions.
+## 12. 访问控制、凭据与 Secret
 
-### 11.3 Selection order
+目标资源层级为 `Organization → Project → Virtual Keys / Route Policies / Quotas / Budgets / Usage Views`。
 
-1. Filter by tenant/project authorization.
-2. Filter by request capabilities.
-3. Filter by provider-extension compatibility.
-4. Check quota and budget eligibility.
-5. Remove disabled or open-circuit targets.
-6. Select by weight within the best remaining priority group.
+初始数据面使用平台级引导 Organization 和 Project。虚拟 Key 使用高熵随机值和非敏感前缀，明文只在创建时返回一次；持久化检索使用带服务端 Pepper 的 HMAC-SHA-256 指纹。
 
-Randomness and clocks are injected so route decisions are deterministic in tests.
+透明代理继续基于上游凭据执行现有限流。统一网关基于虚拟 Key 和 Project 执行限流、配额和预算，两套命名空间和存储不共享。
 
-### 11.4 Retry and failover
+凭据支持平台凭据池和后续租户 BYOK。路由目标绑定凭据 ID 与作用域，Usage、成本和审计保留凭据归属。
 
-- Retries are bounded by a total request deadline and maximum attempt count.
-- Connection failures, configured timeouts, 429 responses, and selected 5xx/overload classes may be retried.
-- Authentication, authorization, validation, and other non-retriable 4xx responses are not retried.
-- Retry honors upstream `Retry-After` only when it fits inside the remaining deadline.
-- Passive attempt outcomes drive circuit state. Active checks are optional and must not create billable model generations.
-- Once the first downstream response event is written, the upstream target is committed and no retry or failover is allowed.
-- Provider-specific options cannot be rewritten merely to make a fallback target eligible.
-
-One logical request may have multiple attempt records. All known provider costs are recorded even when an earlier attempt was not returned to the client.
-
-## 12. Access and tenancy
-
-The target hierarchy is:
-
-```text
-Organization
-  └─ Project
-      ├─ Virtual Keys
-      ├─ Allowed Models and Route Policies
-      ├─ Quotas and Budgets
-      └─ Usage and Cost Views
-```
-
-The initial self-hosted data plane uses a platform organization/project bootstrap record. IDs and scope remain present in application and domain contracts so multi-tenancy does not require changing the inference API.
-
-Virtual keys are high-entropy random values with an identifiable non-secret prefix. The control plane returns plaintext only once at creation. Persistent lookup uses an HMAC-SHA-256 fingerprint with a server-side pepper; logs retain only a non-secret key ID or safe suffix.
-
-The existing transparent-proxy limiter continues to key on forwarded upstream credentials and keeps its current semantics. Unified-gateway rate limits, quotas, and budgets key on virtual-key/project context. The two limiter namespaces and stores are not shared.
-
-The future control plane provides organization membership, project roles, service accounts, RBAC, and immutable audit events. Payment and invoice domains remain outside scope.
-
-## 13. Credentials and secrets
-
-The system supports both credential modes:
-
-1. A platform credential pool, implemented first.
-2. Tenant-owned BYOK credentials, enabled in a later phase.
-
-Every route target binds to a credential ID and credential scope. Usage, cost, and audit records preserve whether a platform or tenant credential was used.
-
-The `SecretResolver` domain port accepts a secret reference and returns a short-lived secret value. Planned infrastructure adapters are:
+`SecretResolver` 计划实现：
 
 - `env://NAME`
 - `file:///absolute/path`
 - `db-encrypted://credential/<id>`
 
-The database adapter uses AES-256-GCM envelope encryption. Each stored secret includes cipher version, nonce, encrypted data, and key-encryption-key ID. Root/key-encryption keys live outside PostgreSQL and are supplied through an environment/file key provider initially; KMS/Vault implementations may be added later. Rotation writes a new secret version before retiring the old version.
+数据库实现采用 AES-256-GCM 信封加密。记录包含密文版本、Nonce、加密数据和 KEK ID。根密钥或 KEK 位于 PostgreSQL 之外；第一版由环境变量或文件 Key Provider 提供，未来可接 KMS/Vault。轮换时先写新版本，再停用旧版本。
 
-Resolved plaintext may be cached for a short, configurable TTL and is invalidated by credential version changes. Plaintext never appears in runtime snapshots, logs, traces, metrics, errors, audit payloads, or API responses.
+Secret 明文只允许短期缓存，并按凭据版本失效。快照、日志、Trace、Metrics、错误、审计和 API 响应都不能包含明文。
 
-Credential deletion is staged: disable dependent route targets, publish and confirm a new snapshot, revoke/delete the upstream secret, and finally remove recoverable metadata according to retention policy.
+推理应用服务通过 `SecretResolver` 获取仅限本次调用的短生命周期凭据租约，再交给目标连接器。连接器不能自行查询凭据 Repository，也不能持久保存明文。
 
-## 14. Control plane and runtime snapshots
+删除凭据先停用依赖路由并发布新快照，再撤销上游 Secret，最后按保留策略清理可删除元数据；不可变审计记录继续保留。
 
-PostgreSQL is the source of truth for control-plane resources. Redis is never the source of truth for configuration.
+## 13. 控制面与运行快照
 
-An administrative write performs the following in one database transaction:
+PostgreSQL 是控制面资源的唯一事实来源，Redis 不是配置事实来源。
 
-1. Validate RBAC and domain invariants.
-2. Write resource changes.
-3. Write an immutable audit event.
-4. Write an outbox event.
+一次管理写操作在同一事务中校验 RBAC 与领域约束、写资源变更、写不可变审计事件、写 Outbox 事件。
 
-The snapshot compiler reads a consistent configuration version, resolves references, validates route and capability invariants, and emits an immutable `RuntimeSnapshot`. The snapshot contains virtual-key fingerprints, access policy, model catalog, route plans, deployment metadata, price-version references, and credential references. It never contains plaintext secrets.
+快照编译器读取一致配置版本，解析引用并校验约束，生成不可变 `RuntimeSnapshot`。快照包含虚拟 Key 指纹、访问策略、模型目录、路由计划、部署元数据、价格版本引用和凭据引用，不含 Secret 明文。
 
-Data-plane replicas load and validate a new snapshot before atomically replacing the current pointer. Existing requests retain the old snapshot; new requests use the new snapshot. A failed snapshot leaves the last-known-good version active and raises readiness detail, metrics, logs, and alerts.
+数据面先校验新快照，再原子替换。进行中的请求继续持有旧快照，新请求使用新快照。错误快照不能覆盖 Last-Known-Good，并触发就绪详情、Metrics、日志和告警。
 
-Redis pub/sub or streams notify replicas of a new version, but replicas also poll the authoritative version to recover from missed notifications.
+Redis 用于通知新版本；数据面仍定期对比权威版本，补偿丢失通知。
 
-During the first data-plane milestone, a YAML snapshot source compiles into the exact same `RuntimeSnapshot`. The later PostgreSQL control plane replaces only the source/compiler adapter; inference, routing, and provider connectors remain unchanged. Deployment-level settings such as server ports, logs, and OTel remain file/environment configuration even after dynamic resources move to PostgreSQL.
+第一阶段由 YAML Snapshot Source 编译出同一种 `RuntimeSnapshot`。后续 PostgreSQL 控制面只替换配置来源和编译适配器，推理、路由与连接器不变。端口、日志、OTel 等部署设置始终由文件或环境变量管理。
 
-## 15. Deployment topology
+## 14. 部署、Usage 与成本
 
-Target production topology is single-region, multi-replica:
+生产目标为单区域多副本：数据面在内存持有快照和短期 Secret 缓存，PostgreSQL 提供控制面与 Ledger，Redis 提供分布式配额、熔断协同、配置通知和 Usage Stream。
 
-```text
-Load Balancer
-  └─ stateless data-plane replicas
-       ├─ in-memory RuntimeSnapshot
-       ├─ short-lived secret cache
-       ├─ PostgreSQL control-plane/ledger access through adapters
-       └─ Redis distributed quota, circuit coordination, notification, usage stream
-```
+路由配置不得逐请求查询 PostgreSQL。只有分布式限流、配额预留与对账、严格预算和共享熔断进入 Redis 热路径。本地可使用明确标注为非分布式、非严格的内存适配器；生产配置不满足后端要求时启动失败，不能静默退化。
 
-Route configuration is never queried from PostgreSQL on each request. Redis operations remain on the hot path only where cross-replica semantics are required: distributed rate limiting, quota reservation/reconciliation, strict budgets, and shared circuit coordination.
+调用上游前，网关估算输入 Token，结合最大输出，在 Redis 中原子预留请求数、Token 和预计成本，并创建 Pending 计量事实。严格预算模式下 Redis 不可用则拒绝请求。
 
-Local development can use in-memory adapters and a YAML snapshot. These adapters are explicitly non-distributed and non-strict; production startup rejects an invalid combination when multi-replica or strict budget mode is enabled without the required backend.
+每个尝试记录组织、项目、虚拟 Key、逻辑请求、Attempt、客户端模型、真实目标、凭据归属、原始/统一 Usage、Usage 是否存在、价格版本、结果和时间。客户端只看到最终结果的 Usage；内部 Ledger 记录所有已知计费尝试。Usage 缺失不能当作零。
 
-## 16. Metering, cost, and budget
+生产环境先把 Usage 写入 Redis Stream。Metering Worker 至少一次消费，使用调用时固定的价格版本计算成本，幂等写入 PostgreSQL Ledger，并完成预留对账。事件 ID 唯一约束避免重复计费。
 
-### 16.1 Reservation
+Ledger 不可更新；修正通过补偿记录。汇总报表是可重建 Projection。严格计量的 Redis 必须具备合适的持久化与复制；发布失败或 Pending 长期未完成必须触发严重告警和对账任务。
 
-Before the upstream call, the gateway estimates input tokens and uses the requested maximum output to reserve request count, tokens, and estimated cost atomically in Redis. The reservation is scoped to tenant, project, virtual key, and configured policy windows. Strict budget mode fails closed when Redis is unavailable.
+## 15. 错误、安全与可观测性
 
-Reservation also creates a pending metering fact before provider work begins.
+统一错误包含参数、认证、授权、模型不可用、能力不支持、限流、预算超额、上游超时、上游过载和内部错误。
 
-### 16.2 Attempt-level usage
+Header 未提交时，出口适配器映射为入口协议原生状态码与错误结构。每个响应带稳定网关 Request ID，供应商 Request ID 只进入内部与授权诊断。SSE 开始后不能改变 HTTP 状态；协议支持时发送流内错误并结束流，绝不切换供应商。
 
-Each provider attempt has a deterministic event ID derived from logical request ID and attempt number. A usage event records:
+安全约束：
 
-- tenant, project, and virtual-key IDs;
-- logical request and attempt IDs;
-- requested model identity;
-- provider deployment and upstream model IDs;
-- credential ID and scope;
-- raw provider usage;
-- normalized usage;
-- usage presence state;
-- price version;
-- attempt outcome and timestamps.
+- Base URL 只能由管理员配置，并校验协议、Host、DNS/IP、重定向和私网策略。
+- `provider_options` 带版本、按 Schema 校验且限定供应商。
+- 统一网关禁止任意 Header 透传。
+- 限制正文、图片、JSON 深度、消息/工具数量、Schema、并发、流空闲和总 Deadline。
+- 第一阶段不主动下载远程图片。
+- Prompt 与输出默认不进入日志、Trace、Metrics 或审计。
+- Metrics 禁止使用 API Key、租户、项目、模型、原始路径、Query 或资源 ID。
+- Repository、缓存 Key、快照检索、管理 Command 和 Usage 查询都要覆盖租户隔离。
+- 只有直接对端属于受信代理时才接受代理来源 Header。
 
-The final client response exposes only the successful returned attempt's protocol-compatible usage. The internal ledger records every known billable attempt. Missing usage is a first-class state and is never treated as zero.
+Trace 在 Server Span 下建立认证/策略、模型解析、路由、配额和每次供应商尝试的子 Span。低基数 Metrics 可包含入口协议、规范化端点、连接器类型、结果、重试类型、熔断、配额拒绝、Usage 缺失、快照健康、Secret 失败和计量积压。
 
-### 16.3 Durable delivery and ledger
+迁移必须保持现有透明代理的 OTel URL 归一化、Span 父子关系和低基数规则。
 
-Production uses Redis Streams as the first durable usage sink. A metering worker consumes at least once, calculates cost with the pinned immutable price version, writes the PostgreSQL ledger idempotently, and reconciles the reservation. A unique event-ID constraint prevents duplicate charges.
+## 16. 测试与发布门禁
 
-PostgreSQL ledger rows are immutable. Corrections are compensating entries, not updates. Aggregated reporting tables are rebuildable projections, not billing facts.
+- 移动包前锁定透明代理路由、中间件顺序、限流、SSE Flush、Token、健康检查、OTel、日志和关闭行为。
+- 增加 Import Boundary 测试或 Lint，阻止反向依赖。
+- 为两种入口维护 JSON/SSE Golden Fixture，覆盖文本、图片、工具、结构化输出、停止原因、Usage 和错误。
+- 使用官方 OpenAI 与 Anthropic SDK 执行本地黑盒兼容测试。
+- 覆盖任意分块、CRLF、多行 SSE、未知事件、局部工具 JSON、无尾分隔符、提前断开和最终 Usage 缺失。
+- 所有连接器运行同一套 `httptest.Server` 契约测试，默认不访问真实供应商。
+- 注入时钟、随机源和 Transport，测试加权选择、错误分类、Deadline、`Retry-After`、故障转移和熔断。
+- 对统一映射和流解析执行 Fuzz/Property Test；验证取消、背压、Goroutine 清理和首事件 Flush。
+- 集成测试验证 PostgreSQL、Redis、Usage 幂等、Ledger 补偿、预留对账、Outbox、快照原子性、租户隔离、SSRF、虚拟 Key 和 Secret 轮换。
 
-The Redis deployment used for strict metering requires persistence and replication appropriate to the deployment's loss tolerance. Failed event publication or an uncompleted pending fact produces a critical alert and reconciliation work item. The self-hosted in-memory sink is marked best-effort and cannot claim strict budget enforcement.
+发布前执行受影响包测试、`go test ./...`、必要的 `go test -race ./...`、构建、`git diff --check`、协议兼容和流式契约测试。性能必须对比受控基线，流式实现不得缓存完整响应。透明代理测试不能通过修改预期掩盖行为变化。
 
-## 17. Error model
+## 17. 分阶段交付
 
-Canonical error categories include:
+### 阶段一：DDD 基础与统一推理内核
 
-- invalid request;
-- authentication failure;
-- authorization failure;
-- unknown or unavailable model;
-- unsupported capability;
-- rate limited;
-- budget exceeded;
-- upstream timeout;
-- upstream overloaded/unavailable;
-- internal failure.
+- 补齐透明代理特征测试。
+- 建立 DDD 分层与 Wire 组装。
+- 小步移动现有技术包，每一步保持构建和回归通过。
+- 新增两个 `/v1` 入口、统一请求/响应/事件、虚拟 Key、YAML Snapshot、能力矩阵和供应商扩展。
+- 实现四类连接器、加权路由、优先级故障转移、有限重试和本地熔断。
+- 通过 `env://` 与 `file://` 提供平台凭据。
 
-Before response headers are committed, the egress adapter maps the canonical error to the selected ingress protocol's native status and error envelope. Every response has a stable gateway request ID. Provider request IDs are captured internally and exposed only through authorized diagnostics.
+阶段一禁止大爆炸式交付，依次拆成三份实施计划：
 
-After SSE begins, HTTP status cannot change. The egress adapter emits a protocol-compatible in-stream error where supported and terminates the stream in a way covered by official-SDK compatibility tests. It never switches providers after stream commitment.
+1. **阶段一 A：DDD 基础迁移**——补齐特征测试、建立分层与 Wire、小步移动现有包，功能行为保持不变。
+2. **阶段一 B：统一协议内核**——实现领域类型、应用用例、两个入口协议、虚拟 Key、YAML Snapshot 和 Fake Connector，先验证完整纵向链路。
+3. **阶段一 C：供应商与路由**——逐个加入四类真实连接器、能力矩阵、供应商扩展、加权路由、重试和熔断。
 
-Error messages disclose no upstream credentials, secret references, internal network addresses, raw provider bodies, tenant existence, or unredacted request content.
+### 阶段二：生产级数据面与可靠计量
 
-## 18. Security
+- 增加 PostgreSQL、Redis、分布式限流、配额、共享熔断和配置通知。
+- 增加 Redis Stream、Metering Worker、价格版本、Ledger、对账和预算。
+- 增加 `db-encrypted://`、外部根密钥和轮换。
+- 在管理 API 前，通过复用凭据应用服务的 CLI 安全地新增、轮换、停用和查看加密凭据元数据。
+- 验证多副本与后端故障。
 
-- Provider base URLs are administrative resources, never request parameters.
-- Base URLs allow only configured HTTP(S) schemes and pass hostname, DNS/IP, redirect, and private-network policy checks.
-- `provider_options` are versioned, schema-validated, and provider-scoped.
-- Arbitrary request-header forwarding is forbidden on unified gateway routes.
-- Request body size, inline image size, JSON depth, message count, tool count, schema size, concurrency, idle timeout, and total deadline are bounded.
-- The gateway does not fetch remote image URLs for protocol conversion in the first milestone.
-- Prompt and completion content are excluded from logs, traces, metrics, and audit by default.
-- Metrics never use API key, tenant ID, project ID, model ID, raw path, query, or resource ID as attributes.
-- Secret values are redacted at construction boundaries and never formatted into generic errors.
-- Tenant isolation tests cover every repository, cache key, snapshot lookup, administrative command, and usage query.
-- Trusted reverse-proxy headers are honored only when the immediate peer is configured as trusted.
+### 阶段三：多租户控制面
 
-## 19. Observability
+- 实现 Organization、Project、成员、Service Account、虚拟 Key、RBAC 和审计。
+- 实现管理 API、Repository、Migration、Transaction 和 Outbox。
+- 实现 PostgreSQL 快照编译、版本发布、平台凭据池管理和 Usage/成本查询 Projection。
 
-The server trace contains child spans for authentication/policy, model resolution, routing, quota reservation, and each provider attempt. Attempt spans preserve parent context and inject `traceparent` upstream where supported.
+### 阶段四：生态扩展
 
-Low-cardinality metrics include ingress protocol, normalized endpoint, provider connector kind, outcome, retry class, circuit state, quota rejection reason, missing usage, snapshot version health, secret-resolution failures, and metering lag. Dynamic model, tenant, key, prompt, and raw route values are excluded from metric attributes.
+- 启用租户 BYOK。
+- 增加 OpenAI Responses API。
+- 定义外部供应商 Adapter RPC。
+- 增加供应商、Secret 后端，以及确有需求时的动态路由和多区域部署。
 
-Structured logs may include internal request ID, attempt ID, safe tenant/project resource IDs, route-policy version, deployment ID, normalized endpoint, status, bytes, and latency. They may not include request/response bodies or secret values.
+每个阶段和子阶段编码前都要有自己的细化设计与实施计划。本文批准后，下一份计划只聚焦“阶段一 A：DDD 基础迁移”。
 
-The existing transparent-proxy OTel URL normalization, parent-child span semantics, and low-cardinality rules remain unchanged during migration.
+## 18. 总体验收标准
 
-## 20. Testing strategy
+1. 现有透明代理客户端无行为回归。
+2. 官方 OpenAI 与 Anthropic SDK 在能力矩阵内通过新入口兼容测试。
+3. 四类连接器通过统一契约测试。
+4. 不支持的组合返回明确的协议原生错误。
+5. 流式响应在上游结束前转发首事件，正确传播取消与背压，无 Goroutine 泄漏。
+6. 路由、重试和熔断遵守规则，流提交后绝不故障转移。
+7. 多副本执行分布式配额并幂等记录尝试级 Usage。
+8. 控制面发布原子快照，错误快照不能替换 Last-Known-Good。
+9. 平台与租户凭据作用域正确、可加密或引用、可轮换、可脱敏、可审计。
+10. domain 包不存在基础设施或传输依赖。
 
-### 20.1 Characterization and architecture tests
+## 19. 协议参考
 
-- Lock existing transparent-proxy routes, middleware order, rate-limit semantics, SSE flush behavior, token observation, health/readiness, OTel propagation, logging, and shutdown behavior before moving packages.
-- Add import-boundary tests or lint rules that reject domain imports from application, interfaces, or infrastructure and reject application imports from interfaces/infrastructure.
-
-### 20.2 Protocol conformance
-
-- Maintain golden JSON/SSE fixtures for both ingress protocols.
-- Exercise text, image, tools, parallel tools, structured output, stop reasons, usage, and errors.
-- Run black-box compatibility tests through official OpenAI and Anthropic SDKs using the local server.
-- Handle arbitrary network chunks, CRLF, multi-line SSE data, unknown events, partial tool JSON, streams without trailing separators, early disconnects, and final usage omissions.
-
-### 20.3 Connector contract suite
-
-Every connector runs the same contract suite against `httptest.Server` fakes. Default tests do not call real providers. Optional credential-gated smoke tests run separately and never print secrets or content.
-
-### 20.4 Routing and resilience
-
-- Inject clock, random source, and transport to test deterministic weighted selection.
-- Test retry classification, total deadline, `Retry-After`, priority fallback, circuit transitions, and the no-failover-after-first-event invariant.
-- Use fuzz/property tests for canonical mapping and stream decoders.
-- Verify cancellation, backpressure, goroutine cleanup, and first-event flush before upstream completion.
-
-### 20.5 Persistence and tenancy
-
-- Run PostgreSQL and Redis integration suites separately from fast unit tests.
-- Verify idempotent usage consumption, immutable ledger corrections, reservation reconciliation, outbox publication, snapshot atomicity, and last-known-good behavior.
-- Run tenant-isolation, SSRF, provider-option validation, virtual-key hashing, secret rotation, and redaction tests.
-
-### 20.6 Release gates
-
-- Affected package tests, then `go test ./...`.
-- `go test -race ./...` for concurrent routing, snapshots, metering, cache, and statistics changes.
-- `go build -o /tmp/llm-proxy ./cmd/proxy`.
-- `git diff --check`.
-- Protocol compatibility suite and streaming contract suite.
-- Performance comparison against a checked-in benchmark baseline; streaming implementations may not buffer the full response.
-- Existing transparent-proxy behavior tests must remain green without semantic expectation changes.
-
-## 21. Delivery program
-
-This system is intentionally split into separately specified and planned subprojects.
-
-### Phase 1 — DDD foundation and unified inference core
-
-- Capture transparent-proxy characterization tests before moving packages.
-- Add DDD/Clean Architecture layers and Wire composition.
-- Move existing technical packages in small dependency-safe steps without behavior changes, keeping the build and full regression suite green after each move.
-- Add `/v1/chat/completions` and `/v1/messages`.
-- Implement canonical request/response/event types.
-- Implement virtual-key authentication with a bootstrap platform scope.
-- Implement YAML-to-`RuntimeSnapshot` compilation.
-- Implement capability validation and provider options.
-- Implement OpenAI, Anthropic, Gemini, and generic OpenAI-compatible connectors.
-- Implement weighted routing, priority fallback, bounded retries, and local circuit state.
-- Implement platform credentials through `env://` and `file://`.
-
-### Phase 2 — Production data plane and durable metering
-
-- Add PostgreSQL and Redis infrastructure adapters.
-- Add distributed rate limits, quota reservations, shared circuit coordination, and configuration notifications.
-- Add Redis Stream usage transport, metering worker, price versions, PostgreSQL ledger, reconciliation, and budgets.
-- Add `db-encrypted://` Secret Provider with external root-key handling and rotation.
-- Add CLI bootstrap commands that reuse credential application services to put, rotate, disable, and inspect encrypted credential metadata before the full administrative API exists.
-- Validate multi-replica behavior and failure modes.
-
-### Phase 3 — Multi-tenant control plane
-
-- Add organization, project, membership, service account, virtual-key, RBAC, and audit aggregates/use cases.
-- Add administrative APIs, repositories, migrations, transaction boundaries, and outbox processing.
-- Add PostgreSQL snapshot compiler and versioned publication.
-- Add platform credential-pool management and usage/cost query projections.
-
-### Phase 4 — Ecosystem expansion
-
-- Enable tenant BYOK.
-- Add OpenAI Responses API ingress.
-- Define and implement an external provider-adapter RPC contract.
-- Add more native providers and Secret backends.
-- Add dynamic cost/latency/region policy and, only when required, multi-region topology.
-
-Each phase receives its own design refinement and implementation plan before code changes. The next plan after this umbrella design is approved is **Phase 1: DDD foundation and unified inference core**.
-
-## 22. Acceptance criteria for the target design
-
-The architecture is considered realized when:
-
-1. Existing `/openai/*` and `/anthropic/*` clients observe no behavior regression.
-2. Official OpenAI and Anthropic SDK compatibility suites pass against the new root endpoints for the supported capability matrix.
-3. The four initial connector kinds pass a common connector contract suite.
-4. Unsupported semantic combinations produce explicit protocol-native errors.
-5. Streaming forwards the first upstream event before upstream completion and propagates cancellation/backpressure without goroutine leaks.
-6. Route selection, retries, and circuit breaking obey the documented deterministic rules and never fail over after response commitment.
-7. Multi-replica deployments enforce distributed quotas and record attempt-level usage idempotently.
-8. PostgreSQL control-plane changes publish atomic snapshots, and invalid snapshots cannot replace last-known-good state.
-9. Platform and tenant credentials remain scoped, encrypted/referenced, rotatable, redacted, and auditable.
-10. Domain packages have no infrastructure or transport dependencies.
-
-## 23. Protocol references
-
-- [OpenAI Chat API reference](https://developers.openai.com/api/reference/resources/chat)
+- [OpenAI Chat API](https://developers.openai.com/api/reference/resources/chat)
 - [Anthropic Streaming Messages](https://platform.claude.com/docs/en/build-with-claude/streaming)
-- [Anthropic API errors](https://platform.claude.com/docs/en/api/errors)
-- [Gemini function calling and streamed arguments](https://ai.google.dev/gemini-api/docs/function-calling)
-- [Gemini structured output](https://ai.google.dev/gemini-api/docs/structured-output)
+- [Anthropic API Errors](https://platform.claude.com/docs/en/api/errors)
+- [Gemini Function Calling](https://ai.google.dev/gemini-api/docs/function-calling)
+- [Gemini Structured Output](https://ai.google.dev/gemini-api/docs/structured-output)
 
-These references are implementation inputs, not stable internal contracts. Provider wire formats remain isolated inside versioned interface and infrastructure adapters.
+这些外部文档是实现输入，不是稳定内部契约。供应商协议变化必须隔离在带版本的 interfaces 与 infrastructure 适配器中。
