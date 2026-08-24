@@ -664,11 +664,17 @@
       <div class="tab-panel active" id="tab-curl">
         <div class="usage-block">
           <h3>OpenAI</h3>
-          <pre><span class="comment"># 普通请求</span>
+          <pre><span class="comment"># Chat Completions</span>
 curl <span class="url" id="url-openai">http://localhost:8080</span>/openai/v1/chat/completions \
   <span class="flag">-H</span> <span class="string">"Authorization: Bearer $OPENAI_API_KEY"</span> \
   <span class="flag">-H</span> <span class="string">"Content-Type: application/json"</span> \
   <span class="flag">-d</span> <span class="string">'{"model": "gpt-4o", "messages": [{"role": "user", "content": "Hello"}]}'</span>
+
+<span class="comment"># Responses API</span>
+curl <span class="url" id="url-openai-responses">http://localhost:8080</span>/openai/v1/responses \
+  <span class="flag">-H</span> <span class="string">"Authorization: Bearer $OPENAI_API_KEY"</span> \
+  <span class="flag">-H</span> <span class="string">"Content-Type: application/json"</span> \
+  <span class="flag">-d</span> <span class="string">'{"model": "gpt-5", "input": "Hello"}'</span>
 
 <span class="comment"># 流式输出（SSE）</span>
 curl <span class="flag">-N</span> <span class="url" id="url-openai-stream">http://localhost:8080</span>/openai/v1/chat/completions \
@@ -706,11 +712,19 @@ client = OpenAI(
     api_key=<span class="string">"your-openai-api-key"</span>,
 )
 
+<span class="comment"># Chat Completions</span>
 response = client.chat.completions.create(
     model=<span class="string">"gpt-4o"</span>,
     messages=[{<span class="string">"role"</span>: <span class="string">"user"</span>, <span class="string">"content"</span>: <span class="string">"Hello"</span>}],
 )
-print(response.choices[0].message.content)</pre>
+print(response.choices[0].message.content)
+
+<span class="comment"># Responses API</span>
+response = client.responses.create(
+    model=<span class="string">"gpt-5"</span>,
+    input=<span class="string">"Hello"</span>,
+)
+print(response.output_text)</pre>
         </div>
         <div class="usage-block">
           <h3>Anthropic SDK</h3>
@@ -1042,7 +1056,7 @@ console.log(res.content);</pre>
       // base_url 替换（覆盖所有 tab 中的地址占位符）
       if (data.base_url) {
         var urlIds = [
-          'url-openai', 'url-openai-stream',
+          'url-openai', 'url-openai-responses', 'url-openai-stream',
           'url-anthropic', 'url-anthropic-stream',
           'url-py-openai', 'url-py-anthropic',
           'url-js-openai', 'url-js-anthropic',

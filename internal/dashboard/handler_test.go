@@ -211,6 +211,27 @@ func TestHandler_TokenSection(t *testing.T) {
 	}
 }
 
+func TestHandler_OpenAIResponsesExamples(t *testing.T) {
+	h, _ := newTestHandler("1.0.0")
+	recorder := httptest.NewRecorder()
+	h.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/", nil))
+
+	body := recorder.Body.String()
+	for _, marker := range []string{
+		`id="url-openai-responses"`,
+		`/openai/v1/responses`,
+		`client.responses.create(`,
+		`print(response.output_text)`,
+	} {
+		if !strings.Contains(body, marker) {
+			t.Errorf("dashboard HTML missing Responses API marker %q", marker)
+		}
+	}
+	if got := strings.Count(body, "url-openai-responses"); got < 2 {
+		t.Errorf("url-openai-responses occurrences = %d, want at least 2 (element and replacement list)", got)
+	}
+}
+
 func extractProxyData(t *testing.T, body string) proxyData {
 	t.Helper()
 	const prefix = "window.__PROXY_DATA__ = "
