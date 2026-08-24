@@ -24,6 +24,11 @@ const (
 	envRateLimitOverrides         = "LLM_PROXY_RATE_LIMIT_OVERRIDES"
 	envOpenAIBaseURL              = "LLM_PROXY_PROVIDERS_OPENAI_BASE_URL"
 	envAnthropicBaseURL           = "LLM_PROXY_PROVIDERS_ANTHROPIC_BASE_URL"
+	envObservabilityEnabled       = "LLM_PROXY_OBSERVABILITY_ENABLED"
+	envObservabilityServiceName   = "LLM_PROXY_OBSERVABILITY_SERVICE_NAME"
+	envObservabilityOTLPEndpoint  = "LLM_PROXY_OBSERVABILITY_OTLP_ENDPOINT"
+	envObservabilitySampleRatio   = "LLM_PROXY_OBSERVABILITY_TRACE_SAMPLE_RATIO"
+	envObservabilityMetricSeconds = "LLM_PROXY_OBSERVABILITY_METRICS_EXPORT_INTERVAL_SECONDS"
 )
 
 type envBinding struct {
@@ -43,6 +48,11 @@ var envBindings = []envBinding{
 	{key: "rate_limit.default.burst", name: envRateLimitBurst, validate: validateInt},
 	{key: "providers.openai.base_url", name: envOpenAIBaseURL},
 	{key: "providers.anthropic.base_url", name: envAnthropicBaseURL},
+	{key: "observability.enabled", name: envObservabilityEnabled, validate: validateBool},
+	{key: "observability.service_name", name: envObservabilityServiceName},
+	{key: "observability.otlp_endpoint", name: envObservabilityOTLPEndpoint},
+	{key: "observability.trace_sample_ratio", name: envObservabilitySampleRatio, validate: validateFloat},
+	{key: "observability.metrics_export_interval_seconds", name: envObservabilityMetricSeconds, validate: validateInt},
 }
 
 func loadDotEnv() error {

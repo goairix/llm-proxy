@@ -21,6 +21,11 @@ var configEnvNames = []string{
 	"LLM_PROXY_RATE_LIMIT_OVERRIDES",
 	"LLM_PROXY_PROVIDERS_OPENAI_BASE_URL",
 	"LLM_PROXY_PROVIDERS_ANTHROPIC_BASE_URL",
+	"LLM_PROXY_OBSERVABILITY_ENABLED",
+	"LLM_PROXY_OBSERVABILITY_SERVICE_NAME",
+	"LLM_PROXY_OBSERVABILITY_OTLP_ENDPOINT",
+	"LLM_PROXY_OBSERVABILITY_TRACE_SAMPLE_RATIO",
+	"LLM_PROXY_OBSERVABILITY_METRICS_EXPORT_INTERVAL_SECONDS",
 }
 
 func isolateConfigEnvironment(t *testing.T) string {
@@ -91,6 +96,13 @@ providers:
     base_url: "https://custom.openai.com"
   anthropic:
     base_url: "https://custom.anthropic.com"
+
+observability:
+  enabled: true
+  service_name: proxy-test
+  otlp_endpoint: http://collector.example:4318
+  trace_sample_ratio: 0.5
+  metrics_export_interval_seconds: 30
 `,
 			wantErr: false,
 			check: func(t *testing.T, cfg *Config) {
@@ -155,6 +167,17 @@ providers:
 				if cfg.Providers.Anthropic.BaseURL != "https://custom.anthropic.com" {
 					t.Errorf("Providers.Anthropic.BaseURL = %q, want %q", cfg.Providers.Anthropic.BaseURL, "https://custom.anthropic.com")
 				}
+
+				wantObservability := ObservabilityConfig{
+					Enabled:                      true,
+					ServiceName:                  "proxy-test",
+					OTLPEndpoint:                 "http://collector.example:4318",
+					TraceSampleRatio:             0.5,
+					MetricsExportIntervalSeconds: 30,
+				}
+				if cfg.Observability != wantObservability {
+					t.Fatalf("Observability = %+v, want %+v", cfg.Observability, wantObservability)
+				}
 			},
 		},
 		{
@@ -188,6 +211,16 @@ providers:
 				}
 				if cfg.Providers.Anthropic.BaseURL != "https://api.anthropic.com" {
 					t.Errorf("Providers.Anthropic.BaseURL = %q, want %q (default)", cfg.Providers.Anthropic.BaseURL, "https://api.anthropic.com")
+				}
+				wantObservability := ObservabilityConfig{
+					Enabled:                      false,
+					ServiceName:                  "llm-proxy",
+					OTLPEndpoint:                 "http://localhost:4318",
+					TraceSampleRatio:             0.1,
+					MetricsExportIntervalSeconds: 15,
+				}
+				if cfg.Observability != wantObservability {
+					t.Fatalf("Observability = %+v, want %+v", cfg.Observability, wantObservability)
 				}
 			},
 		},
@@ -274,6 +307,12 @@ rate_limit:
 providers:
   openai:
     base_url: https://yaml.openai.example
+observability:
+  enabled: false
+  service_name: yaml-service
+  otlp_endpoint: http://yaml-collector.example:4318
+  trace_sample_ratio: 0.2
+  metrics_export_interval_seconds: 20
 `)
 
 	t.Setenv("LLM_PROXY_SERVER_PORT", "9090")
@@ -286,6 +325,11 @@ providers:
 	t.Setenv("LLM_PROXY_RATE_LIMIT_DEFAULT_BURST", "25")
 	t.Setenv("LLM_PROXY_PROVIDERS_OPENAI_BASE_URL", "https://env.openai.example")
 	t.Setenv("LLM_PROXY_PROVIDERS_ANTHROPIC_BASE_URL", "https://env.anthropic.example")
+	t.Setenv("LLM_PROXY_OBSERVABILITY_ENABLED", "true")
+	t.Setenv("LLM_PROXY_OBSERVABILITY_SERVICE_NAME", "env-service")
+	t.Setenv("LLM_PROXY_OBSERVABILITY_OTLP_ENDPOINT", "http://env-collector.example:4318")
+	t.Setenv("LLM_PROXY_OBSERVABILITY_TRACE_SAMPLE_RATIO", "0.75")
+	t.Setenv("LLM_PROXY_OBSERVABILITY_METRICS_EXPORT_INTERVAL_SECONDS", "45")
 
 	cfg, err := Load(configPath)
 	if err != nil {
@@ -303,6 +347,16 @@ providers:
 	if cfg.Providers.OpenAI.BaseURL != "https://env.openai.example" || cfg.Providers.Anthropic.BaseURL != "https://env.anthropic.example" {
 		t.Fatalf("providers config = %+v", cfg.Providers)
 	}
+	wantObservability := ObservabilityConfig{
+		Enabled:                      true,
+		ServiceName:                  "env-service",
+		OTLPEndpoint:                 "http://env-collector.example:4318",
+		TraceSampleRatio:             0.75,
+		MetricsExportIntervalSeconds: 45,
+	}
+	if cfg.Observability != wantObservability {
+		t.Fatalf("observability config = %+v, want %+v", cfg.Observability, wantObservability)
+	}
 }
 
 func TestLoadInvalidScalarEnvironment(t *testing.T) {
@@ -313,6 +367,9 @@ func TestLoadInvalidScalarEnvironment(t *testing.T) {
 		{name: "LLM_PROXY_SERVER_PORT", value: "not-an-int"},
 		{name: "LLM_PROXY_RATE_LIMIT_ENABLED", value: "not-a-bool"},
 		{name: "LLM_PROXY_RATE_LIMIT_DEFAULT_REQUESTS_PER_SECOND", value: "not-a-float"},
+		{name: "LLM_PROXY_OBSERVABILITY_ENABLED", value: "not-a-bool"},
+		{name: "LLM_PROXY_OBSERVABILITY_TRACE_SAMPLE_RATIO", value: "not-a-float"},
+		{name: "LLM_PROXY_OBSERVABILITY_METRICS_EXPORT_INTERVAL_SECONDS", value: "not-an-int"},
 	}
 
 	for _, tc := range tests {

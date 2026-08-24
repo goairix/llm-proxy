@@ -6,10 +6,11 @@ import (
 
 // Config is the root configuration struct.
 type Config struct {
-	Server    ServerConfig    `mapstructure:"server"`
-	Log       LogConfig       `mapstructure:"log"`
-	RateLimit RateLimitConfig `mapstructure:"rate_limit"`
-	Providers ProvidersConfig `mapstructure:"providers"`
+	Server        ServerConfig        `mapstructure:"server"`
+	Log           LogConfig           `mapstructure:"log"`
+	RateLimit     RateLimitConfig     `mapstructure:"rate_limit"`
+	Providers     ProvidersConfig     `mapstructure:"providers"`
+	Observability ObservabilityConfig `mapstructure:"observability"`
 }
 
 // ServerConfig holds HTTP server settings.
@@ -50,6 +51,15 @@ type ProviderConfig struct {
 	BaseURL string `mapstructure:"base_url"`
 }
 
+// ObservabilityConfig holds OpenTelemetry exporter settings.
+type ObservabilityConfig struct {
+	Enabled                      bool    `mapstructure:"enabled"`
+	ServiceName                  string  `mapstructure:"service_name"`
+	OTLPEndpoint                 string  `mapstructure:"otlp_endpoint"`
+	TraceSampleRatio             float64 `mapstructure:"trace_sample_ratio"`
+	MetricsExportIntervalSeconds int     `mapstructure:"metrics_export_interval_seconds"`
+}
+
 // Load reads configuration from the YAML file at path and returns a Config.
 // If the file does not exist, defaults are still applied and no error is returned.
 func Load(path string) (*Config, error) {
@@ -69,6 +79,11 @@ func Load(path string) (*Config, error) {
 	v.SetDefault("rate_limit.default.burst", 20)
 	v.SetDefault("providers.openai.base_url", "https://api.openai.com")
 	v.SetDefault("providers.anthropic.base_url", "https://api.anthropic.com")
+	v.SetDefault("observability.enabled", false)
+	v.SetDefault("observability.service_name", "llm-proxy")
+	v.SetDefault("observability.otlp_endpoint", "http://localhost:4318")
+	v.SetDefault("observability.trace_sample_ratio", 0.1)
+	v.SetDefault("observability.metrics_export_interval_seconds", 15)
 	if err := bindEnvironment(v); err != nil {
 		return nil, err
 	}
