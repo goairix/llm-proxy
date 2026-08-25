@@ -12,10 +12,8 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/goairix/llm-proxy/internal/di"
 	"github.com/goairix/llm-proxy/internal/infrastructure/config"
-	"github.com/goairix/llm-proxy/internal/infrastructure/logger"
-	"github.com/goairix/llm-proxy/internal/infrastructure/observability"
-	"github.com/goairix/llm-proxy/internal/server"
 )
 
 func main() {
@@ -25,28 +23,16 @@ func main() {
 		log.Fatalf("failed to load config: %v", err)
 	}
 
-	// Initialise structured logger.
-	log_, err := logger.New(cfg.Log)
+	app, err := di.Initialize(context.Background(), cfg)
 	if err != nil {
-		log.Fatalf("failed to init logger: %v", err)
+		log.Fatalf("failed to initialize application: %v", err)
 	}
-	defer log_.Sync() //nolint:errcheck
-
-	telemetry, err := observability.New(context.Background(), cfg.Observability, server.Version, log_)
-	if err != nil {
-		log.Fatalf("failed to init observability: %v", err)
-	}
-
-	// Build and configure the HTTP server.
-	srv, err := server.New(cfg, log_, telemetry)
-	if err != nil {
-		log.Fatalf("failed to create server: %v", err)
-	}
+	defer app.Logger.Sync() //nolint:errcheck
 
 	// Start serving in a background goroutine.
 	go func() {
-		if err := srv.Start(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			log_.Error("server error", zap.Error(err))
+		if err := app.Server.Start(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			app.Logger.Error("server error", zap.Error(err))
 		}
 	}()
 
@@ -59,10 +45,10 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	if err := srv.Shutdown(ctx); err != nil {
-		log_.Error("shutdown error", zap.Error(err))
+	if err := app.Server.Shutdown(ctx); err != nil {
+		app.Logger.Error("shutdown error", zap.Error(err))
 	}
-	if err := telemetry.Shutdown(ctx); err != nil {
-		log_.Error("telemetry shutdown error", zap.Error(err))
+	if err := app.Telemetry.Shutdown(ctx); err != nil {
+		app.Logger.Error("telemetry shutdown error", zap.Error(err))
 	}
 }
