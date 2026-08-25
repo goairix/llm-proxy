@@ -1,86 +1,77 @@
+// Package server is a temporary compatibility facade for the legacy main package.
+// It is removed after the Wire composition root takes ownership of assembly.
 package server
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/http"
-	"sync/atomic"
-	"time"
-
-	"go.uber.org/zap"
 
 	appRuntime "github.com/goairix/llm-proxy/internal/application/runtime"
 	"github.com/goairix/llm-proxy/internal/infrastructure/config"
 	"github.com/goairix/llm-proxy/internal/infrastructure/observability"
 	"github.com/goairix/llm-proxy/internal/infrastructure/proxy"
 	"github.com/goairix/llm-proxy/internal/infrastructure/proxy/tokenusage"
+	httpserver "github.com/goairix/llm-proxy/internal/infrastructure/server/http"
 	"github.com/goairix/llm-proxy/internal/interfaces/http/handler/dashboard"
 	"github.com/goairix/llm-proxy/internal/interfaces/http/middleware"
+	"github.com/goairix/llm-proxy/internal/interfaces/http/router"
+	"go.uber.org/zap"
 )
 
-// Version is the current server version.
+// Version is kept for compatibility until main switches to application/runtime.Version.
 const Version = appRuntime.Version
 
-// Server wraps the standard library HTTP server and holds a logger.
+// Server delegates lifecycle operations to the infrastructure HTTP server.
 type Server struct {
-	httpServer *http.Server
-	logger     *zap.Logger
-	ready      atomic.Bool
+	delegate *httpserver.Server
 }
 
-// New creates and configures the HTTP server with all routes and middleware.
+// New assembles the legacy transparent proxy through the new adapters.
 func New(cfg *config.Config, logger *zap.Logger, telemetry *observability.Runtime) (*Server, error) {
-	mux := http.NewServeMux()
-	srv := &Server{logger: logger}
-	mux.HandleFunc("GET /healthz", srv.healthHandler)
-	mux.HandleFunc("/healthz", methodNotAllowed(http.MethodGet))
-	mux.HandleFunc("GET /readyz", srv.readyHandler)
-	mux.HandleFunc("/readyz", methodNotAllowed(http.MethodGet))
-
-	// Dashboard
+	readiness := appRuntime.NewReadiness()
 	stats := &dashboard.Stats{}
 	baseURL := cfg.Server.ShowBaseURL
 	if baseURL == "" {
 		baseURL = fmt.Sprintf("http://localhost:%d", cfg.Server.Port)
 	}
-	dashHandler := dashboard.NewHandler(stats, toDashboardRateLimit(cfg.RateLimit), Version, baseURL)
-	mux.Handle("/", dashHandler)
 
-	// Rate limiter shared across providers
-	rateLimiter := middleware.NewRateLimiter(toMiddlewareRateLimit(cfg.RateLimit))
-
-	// Logging middleware (outermost layer)
-	loggingMiddleware := middleware.Logging(logger)
 	transport := telemetry.Transport(http.DefaultTransport)
-
-	// OpenAI proxy
-	openaiProxy, err := proxy.NewOpenAIProxy(cfg.Providers.OpenAI.BaseURL, transport)
+	openAIProxy, err := proxy.NewOpenAIProxy(cfg.Providers.OpenAI.BaseURL, transport)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create openai proxy: %w", err)
 	}
-	mux.Handle("/openai/", telemetry.WrapHandler("openai", loggingMiddleware(
-		statsMiddleware("openai", stats,
-			rateLimiter.Handler("openai", openaiProxy),
-		),
-	)))
-
-	// Anthropic proxy
 	anthropicProxy, err := proxy.NewAnthropicProxy(cfg.Providers.Anthropic.BaseURL, transport)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create anthropic proxy: %w", err)
 	}
-	mux.Handle("/anthropic/", telemetry.WrapHandler("anthropic", loggingMiddleware(
-		statsMiddleware("anthropic", stats,
-			rateLimiter.Handler("anthropic", anthropicProxy),
-		),
-	)))
 
-	srv.httpServer = &http.Server{
-		Addr:    fmt.Sprintf(":%d", cfg.Server.Port),
-		Handler: mux,
-	}
-	return srv, nil
+	handler := router.New(router.Config{
+		BaseURL:   baseURL,
+		Version:   Version,
+		RateLimit: toMiddlewareRateLimit(cfg.RateLimit),
+		RateView:  toDashboardRateLimit(cfg.RateLimit),
+	}, router.Dependencies{
+		Logger:          logger,
+		Instrumenter:    telemetry,
+		Readiness:       readiness,
+		Stats:           stats,
+		ObserverFactory: tokenusage.NewObserver,
+		OpenAIProxy:     openAIProxy,
+		AnthropicProxy:  anthropicProxy,
+	})
+	delegate := httpserver.New(fmt.Sprintf(":%d", cfg.Server.Port), handler, logger, readiness)
+	return &Server{delegate: delegate}, nil
+}
+
+// Start delegates to the infrastructure HTTP server.
+func (s *Server) Start() error {
+	return s.delegate.Start()
+}
+
+// Shutdown delegates to the infrastructure HTTP server.
+func (s *Server) Shutdown(ctx context.Context) error {
+	return s.delegate.Shutdown(ctx)
 }
 
 func toMiddlewareRateLimit(cfg config.RateLimitConfig) middleware.RateLimitConfig {
@@ -108,131 +99,4 @@ func toDashboardRateLimit(cfg config.RateLimitConfig) dashboard.RateLimitView {
 		RequestsPerSecond: cfg.Default.RequestsPerSecond,
 		Burst:             cfg.Default.Burst,
 	}
-}
-
-// Start begins listening and serving HTTP requests. It blocks until the server
-// is closed. Returns http.ErrServerClosed on graceful shutdown.
-func (s *Server) Start() error {
-	s.ready.Store(true)
-	defer s.ready.Store(false)
-	s.logger.Info("server starting", zap.String("addr", s.httpServer.Addr))
-	return s.httpServer.ListenAndServe()
-}
-
-// Shutdown gracefully shuts down the server with a 10-second timeout.
-func (s *Server) Shutdown(ctx context.Context) error {
-	s.ready.Store(false)
-	shutdownCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-
-	s.logger.Info("server shutting down")
-	return s.httpServer.Shutdown(shutdownCtx)
-}
-
-func (s *Server) healthHandler(w http.ResponseWriter, _ *http.Request) {
-	s.writeStatusJSON(w, http.StatusOK, "ok")
-}
-
-func (s *Server) readyHandler(w http.ResponseWriter, _ *http.Request) {
-	if !s.ready.Load() {
-		s.writeStatusJSON(w, http.StatusServiceUnavailable, "not_ready")
-		return
-	}
-	s.writeStatusJSON(w, http.StatusOK, "ready")
-}
-
-func (s *Server) writeStatusJSON(w http.ResponseWriter, status int, value string) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	if err := json.NewEncoder(w).Encode(struct {
-		Status string `json:"status"`
-	}{Status: value}); err != nil {
-		s.logger.Error("write health response", zap.Error(err))
-	}
-}
-
-func methodNotAllowed(allowed string) http.HandlerFunc {
-	return func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Allow", allowed)
-		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
-	}
-}
-
-// statsResponseWriter captures status code and response bytes for metrics.
-type statsResponseWriter struct {
-	http.ResponseWriter
-	status   int
-	bytes    int
-	observer appRuntime.UsageObserver
-	writeErr error
-}
-
-func (w *statsResponseWriter) WriteHeader(code int) {
-	w.status = code
-	w.ResponseWriter.WriteHeader(code)
-}
-
-func (w *statsResponseWriter) Write(b []byte) (int, error) {
-	n, err := w.ResponseWriter.Write(b)
-	w.bytes += n
-	if n > 0 && w.observer != nil {
-		w.observer.Observe(w.Header().Get("Content-Type"), b[:n])
-	}
-	if err != nil && w.writeErr == nil {
-		w.writeErr = err
-	}
-	return n, err
-}
-
-func (w *statsResponseWriter) Flush() {
-	if f, ok := w.ResponseWriter.(http.Flusher); ok {
-		f.Flush()
-	}
-}
-
-// statsMiddleware records per-request metrics into stats.
-// Placed outside the rate limiter so every request (including 429s) is counted.
-func statsMiddleware(provider string, stats *dashboard.Stats, next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		stats.Total.Add(1)
-		switch provider {
-		case "openai":
-			stats.OpenAI.Add(1)
-		case "anthropic":
-			stats.Anthropic.Add(1)
-		}
-		if r.ContentLength > 0 {
-			stats.ReqBytes.Add(r.ContentLength)
-		}
-
-		start := time.Now()
-		observer := tokenusage.NewObserver(provider, r.Method, r.URL.Path)
-		srw := &statsResponseWriter{
-			ResponseWriter: w,
-			status:         http.StatusOK,
-			observer:       observer,
-		}
-		next.ServeHTTP(srw, r)
-
-		if observer != nil && srw.status >= 200 && srw.status < 300 {
-			result := observer.Finish(srw.status, srw.writeErr)
-			if result.Present {
-				stats.AddTokenUsage(provider, result.Usage)
-			} else {
-				stats.AddMissingUsage(provider)
-			}
-		}
-
-		stats.TotalLatencyMs.Add(time.Since(start).Milliseconds())
-		stats.RespBytes.Add(int64(srw.bytes))
-
-		switch srw.status {
-		case http.StatusTooManyRequests:
-			stats.RateLimited.Add(1)
-		default:
-			if srw.status >= 400 {
-				stats.Errors.Add(1)
-			}
-		}
-	})
 }

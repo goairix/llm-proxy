@@ -1,0 +1,142 @@
+package router
+
+import (
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+
+	appRuntime "github.com/goairix/llm-proxy/internal/application/runtime"
+	"github.com/goairix/llm-proxy/internal/infrastructure/proxy"
+	"github.com/goairix/llm-proxy/internal/infrastructure/proxy/tokenusage"
+	"github.com/goairix/llm-proxy/internal/interfaces/http/handler/dashboard"
+	"github.com/goairix/llm-proxy/internal/interfaces/http/middleware"
+	"go.uber.org/zap"
+)
+
+type identityInstrumenter struct{}
+
+func (identityInstrumenter) WrapHandler(_ string, next http.Handler) http.Handler { return next }
+
+func TestRouterTransparentProviderRoutes(t *testing.T) {
+	type upstreamRequest struct {
+		path          string
+		authorization string
+		anthropicKey  string
+	}
+	received := make(chan upstreamRequest, 2)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		received <- upstreamRequest{
+			path:          r.URL.EscapedPath(),
+			authorization: r.Header.Get("Authorization"),
+			anthropicKey:  r.Header.Get("x-api-key"),
+		}
+		_, _ = io.WriteString(w, `{"ok":true}`)
+	}))
+	defer upstream.Close()
+
+	openAI, err := proxy.NewOpenAIProxy(upstream.URL, http.DefaultTransport)
+	if err != nil {
+		t.Fatal(err)
+	}
+	anthropic, err := proxy.NewAnthropicProxy(upstream.URL, http.DefaultTransport)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stats := &dashboard.Stats{}
+	readiness := appRuntime.NewReadiness()
+	handler := New(Config{
+		BaseURL:   "http://localhost:8080",
+		Version:   "1.0.0",
+		RateLimit: middleware.RateLimitConfig{Enabled: false},
+		RateView:  dashboard.RateLimitView{Enabled: false},
+	}, Dependencies{
+		Logger:          zap.NewNop(),
+		Instrumenter:    identityInstrumenter{},
+		Readiness:       readiness,
+		Stats:           stats,
+		ObserverFactory: tokenusage.NewObserver,
+		OpenAIProxy:     openAI,
+		AnthropicProxy:  anthropic,
+	})
+
+	tests := []struct {
+		name          string
+		path          string
+		authorization string
+		anthropicKey  string
+		wantPath      string
+	}{
+		{name: "openai", path: "/openai/v1/chat/completions", authorization: "Bearer sk-openai", wantPath: "/v1/chat/completions"},
+		{name: "anthropic", path: "/anthropic/v1/messages", anthropicKey: "sk-ant", wantPath: "/v1/messages"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, tc.path, strings.NewReader(`{}`))
+			req.Header.Set("Authorization", tc.authorization)
+			req.Header.Set("x-api-key", tc.anthropicKey)
+			recorder := httptest.NewRecorder()
+			handler.ServeHTTP(recorder, req)
+			if recorder.Code != http.StatusOK || recorder.Body.String() != `{"ok":true}` {
+				t.Fatalf("response = %d %q", recorder.Code, recorder.Body.String())
+			}
+			got := <-received
+			if got.path != tc.wantPath || got.authorization != tc.authorization || got.anthropicKey != tc.anthropicKey {
+				t.Fatalf("upstream request = %+v", got)
+			}
+		})
+	}
+
+	if got := stats.Total.Load(); got != 2 {
+		t.Fatalf("proxy total = %d, want 2", got)
+	}
+	healthRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(healthRecorder, httptest.NewRequest(http.MethodGet, "/healthz", nil))
+	if healthRecorder.Code != http.StatusOK {
+		t.Fatalf("health status = %d, want 200", healthRecorder.Code)
+	}
+	if got := stats.Total.Load(); got != 2 {
+		t.Fatalf("health request changed stats total to %d", got)
+	}
+}
+
+func TestRouterHealthMethodsReadinessAndDashboardFallback(t *testing.T) {
+	readiness := appRuntime.NewReadiness()
+	handler := New(Config{
+		BaseURL: "http://localhost:8080",
+		Version: "1.0.0",
+	}, Dependencies{
+		Logger:          zap.NewNop(),
+		Instrumenter:    identityInstrumenter{},
+		Readiness:       readiness,
+		Stats:           &dashboard.Stats{},
+		ObserverFactory: tokenusage.NewObserver,
+		OpenAIProxy:     http.NotFoundHandler(),
+		AnthropicProxy:  http.NotFoundHandler(),
+	})
+
+	methodRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(methodRecorder, httptest.NewRequest(http.MethodPost, "/healthz", nil))
+	if methodRecorder.Code != http.StatusMethodNotAllowed || methodRecorder.Header().Get("Allow") != http.MethodGet {
+		t.Fatalf("method response = %d Allow=%q", methodRecorder.Code, methodRecorder.Header().Get("Allow"))
+	}
+
+	readyRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(readyRecorder, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+	if readyRecorder.Code != http.StatusServiceUnavailable {
+		t.Fatalf("not-ready status = %d, want 503", readyRecorder.Code)
+	}
+	readiness.SetReady(true)
+	readyRecorder = httptest.NewRecorder()
+	handler.ServeHTTP(readyRecorder, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+	if readyRecorder.Code != http.StatusOK {
+		t.Fatalf("ready status = %d, want 200", readyRecorder.Code)
+	}
+
+	fallbackRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(fallbackRecorder, httptest.NewRequest(http.MethodGet, "/unknown", nil))
+	if fallbackRecorder.Code != http.StatusOK || !strings.Contains(fallbackRecorder.Body.String(), "LLM 代理控制台") {
+		t.Fatalf("fallback response = %d", fallbackRecorder.Code)
+	}
+}
