@@ -24,8 +24,8 @@
 go test ./...
 
 # 指定包或用例
-go test ./internal/middleware/
-go test ./internal/middleware/ -run TestLoggingMiddlewareErrorLevels
+go test ./internal/interfaces/http/middleware/
+go test ./internal/interfaces/http/middleware/ -run TestLoggingMiddlewareErrorLevels
 
 # 涉及 sync.Map、atomic 或并发逻辑时
 go test -race ./...
@@ -68,18 +68,24 @@ docker build -t llm-proxy .
 
 ## 目录职责
 
-- `cmd/proxy/main.go`：加载 `config.yaml`、初始化日志/OTel/服务器、监听信号并依次关闭服务器与 telemetry。
-- `internal/config`：配置结构、默认值、YAML、`.env` 和进程环境变量加载；配置文件缺失时使用默认值，文件存在但无效时启动失败。
-- `internal/server`：路由和中间件组装、Dashboard 统计、HTTP 服务器生命周期；版本号定义在这里。
-- `internal/proxy`：创建两个反向代理，修改目标地址、Host、Path 和 RawPath。
-- `internal/observability`：解析 OTel 标准环境变量、管理 OTLP/HTTP exporter/provider 生命周期、HTTP server/client 插桩和低基数业务 metrics。
-- `internal/tokenusage`：识别五个生成端点，增量解析 JSON/SSE usage 并归一化 OpenAI/Anthropic Token 字段。
-- `internal/middleware`：访问日志、API Key 提取、令牌桶限流。
-- `internal/dashboard`：原子统计、Dashboard 数据注入和页面响应。
-- `internal/dashboard/web/index.html`：Dashboard 源文件，通过 `go:embed` 编入二进制。
-- `internal/logger`：控制台日志和按天轮转的 JSON 文件日志。
+- `cmd/proxy/main.go`：加载 `config.yaml`、调用 DI 组装根、监听信号并依次关闭 HTTP Server 与 telemetry。
+- `internal/domain`：统一网关的供应商无关业务规则；当前透明代理不属于领域模型。
+- `internal/application/runtime`：Readiness、Version 和透明代理 Usage Observer 等稳定应用契约。
+- `internal/interfaces/http/handler/dashboard`：原子统计、Dashboard 数据注入、页面响应和内嵌 HTML。
+- `internal/interfaces/http/handler/health`：存活与就绪 HTTP 适配器。
+- `internal/interfaces/http/middleware`：访问日志、API Key 提取、令牌桶限流、请求与 Token 统计。
+- `internal/interfaces/http/router`：ServeMux 路由和中间件顺序组装，不管理监听生命周期。
+- `internal/infrastructure/config`：配置结构、默认值、YAML、`.env` 和进程环境变量加载；配置文件缺失时使用默认值，文件存在但无效时启动失败。
+- `internal/infrastructure/logger`：控制台日志和按天轮转的 JSON 文件日志。
+- `internal/infrastructure/observability`：解析 OTel 标准环境变量、管理 OTLP/HTTP exporter/provider 生命周期、HTTP server/client 插桩和低基数业务 metrics。
+- `internal/infrastructure/proxy`：创建两个透明反向代理，修改目标地址、Host、Path 和 RawPath。
+- `internal/infrastructure/proxy/tokenusage`：识别五个生成端点，增量解析 JSON/SSE usage 并归一化 OpenAI/Anthropic Token 字段。
+- `internal/infrastructure/server/http`：标准库 HTTP Server 的监听、Readiness 与 Shutdown 生命周期。
+- `internal/di`：Google Wire Provider、模块和唯一应用组装根；生成的 `wire_gen.go` 纳入版本管理。
 - `config.yaml`：带注释的 YAML 运行配置示例，也是本地直接运行时读取的默认路径。
 - `.env.example`：全部 `LLM_PROXY_` 环境变量的非敏感示例；实际 `.env` 不入库。
+
+生产代码依赖方向固定为 `interfaces → application → domain`；`infrastructure` 实现内层端口，可以依赖 `application` 或 `domain`，但不能依赖 `interfaces`。只有 `internal/di` 可以同时引用接口层和基础设施层。`internal/architecture/dependencies_test.go` 自动检查这些边界。
 
 ## 关键实现约束
 
@@ -112,14 +118,14 @@ docker build -t llm-proxy .
 - 禁止在 span/metrics attributes 中加入 API Key、Prompt、模型输出、正文、model、原始动态 path、资源 ID 或 query。
 - `otelhttp` 会自动记录 URL。任何 server/client 插桩都必须先使用静态 `/{provider}/{endpoint}` URL，清空 query/fragment，再在业务 handler 或底层 RoundTripper 前恢复原始 URL/Host/RequestURI。
 - 代理 transport 必须延续入站 context 并向上游注入 `traceparent`；client span 的 parent 应为对应 server span。
-- 修改 OTel 配置、Runtime、插桩或 transport 后至少运行 `go test -race ./internal/observability ./internal/middleware ./internal/proxy ./internal/server` 和完整 build。
+- 修改 OTel 配置、Runtime、插桩或 transport 后至少运行 `go test -race ./internal/infrastructure/observability ./internal/interfaces/http/middleware ./internal/infrastructure/proxy/... ./internal/interfaces/http/router ./internal/infrastructure/server/http` 和完整 build。
 
 ### Dashboard 与统计
 
 - 所有统计字段使用 `sync/atomic`，进程重启后清零；不要为这些计数额外引入互斥锁。
 - Stats 位于 RateLimiter 外层，因此 429 计入总请求数和 `RateLimited`，但不计入一般 `Errors`。
 - Dashboard 在每次请求时将 JSON 注入 `</head>` 前。注入字段变化时同步更新 HTML 使用方和 handler 测试。
-- 修改 `internal/dashboard/web/index.html` 后必须重新构建 Go 二进制才能生效；没有单独的前端打包命令。
+- 修改 `internal/interfaces/http/handler/dashboard/web/index.html` 后必须重新构建 Go 二进制才能生效；没有单独的前端打包命令。
 - Dashboard 的用户界面文字保持中文；Go 标识符和注释遵循周边文件现有风格。
 - Token 统计固定为 Total/OpenAI/Anthropic 三组原子累计值，进程重启清零；不要增加模型、Key、租户或时间序列维度。
 - Token Observer 只处理五个精确 POST 端点和 2xx 响应。4xx/429/5xx、Responses retrieve 和未知路径不得增加 Token 或 missing usage。
@@ -130,7 +136,7 @@ docker build -t llm-proxy .
 
 - 配置优先级为进程环境变量 > `.env` > `config.yaml` > 默认值；环境变量使用 `LLM_PROXY_` 前缀。
 - 列表和映射环境变量使用 JSON，非法的数字、布尔值或 JSON 必须导致启动失败。
-- 新增配置字段时同步修改配置结构、Viper 默认值、`internal/config/env.go`、`config.yaml`、`.env.example` 和配置测试；若 Dashboard 展示该字段，也要更新其注入结构和页面。
+- 新增配置字段时同步修改配置结构、Viper 默认值、`internal/infrastructure/config/env.go`、`config.yaml`、`.env.example` 和配置测试；若 Dashboard 展示该字段，也要更新其注入结构和页面。
 - 配置不会热更新，修改后需要重启进程。
 - OTel 项目配置包括 enabled、service name、OTLP endpoint、trace sample ratio 和 metrics interval；还要检查标准 `OTEL_*` 环境变量的覆盖与协议校验。
 - `main` 提供 30 秒外层退出期限，`Server.Shutdown` 再限制为 10 秒。收到 SIGINT/SIGTERM 后必须先将 ready 置 false，再关闭 HTTP server，最后 ForceFlush/Shutdown telemetry；某一步失败不得跳过后续关闭。
@@ -139,15 +145,16 @@ docker build -t llm-proxy .
 
 | 改动类型 | 通常需要检查的文件 |
 | --- | --- |
-| 新增或修改配置 | `internal/config/config.go`、`env.go`、`config_test.go`、`config.yaml`、`.env.example`，必要时 README |
-| 修改代理路径或上游行为 | `internal/proxy/*.go`、`proxy_test.go`、`internal/server/server.go` |
-| 修改限流 | `internal/middleware/ratelimit.go`、`ratelimit_test.go`、Dashboard 展示 |
-| 修改请求日志 | `internal/middleware/logging.go`、`logging_test.go`、`internal/logger` |
-| 修改统计或 Dashboard | `internal/server/server.go`、`internal/dashboard/handler.go`、对应测试和 HTML |
-| 修改 Token usage 解析 | `internal/tokenusage/*.go`、`internal/server/server.go`、Dashboard 统计与流式测试 |
-| 修改 OTel 或 HTTP 插桩 | `internal/observability/*.go`、Logging、Proxy transport、Server 组装和 race 测试 |
-| 修改健康检查或退出 | `internal/server/server.go`、`cmd/proxy/main.go`、server 测试 |
-| 修改版本号 | `internal/server/server.go` 中的 `Version`，并检查页面展示 |
+| 新增或修改配置 | `internal/infrastructure/config/config.go`、`env.go`、`config_test.go`、`config.yaml`、`.env.example`，必要时 README |
+| 修改代理路径或上游行为 | `internal/infrastructure/proxy/*.go`、`proxy_test.go`、`internal/di/provider/transparent.go` |
+| 修改限流 | `internal/interfaces/http/middleware/ratelimit.go`、`ratelimit_test.go`、DI 配置映射、Dashboard 展示 |
+| 修改请求日志 | `internal/interfaces/http/middleware/logging.go`、`logging_test.go`、`internal/infrastructure/logger` |
+| 修改统计或 Dashboard | `internal/interfaces/http/middleware/stats.go`、`internal/interfaces/http/handler/dashboard`、对应测试和 HTML |
+| 修改 Token usage 解析 | `internal/infrastructure/proxy/tokenusage/*.go`、Stats 中间件、Dashboard 统计与流式测试 |
+| 修改 OTel 或 HTTP 插桩 | `internal/infrastructure/observability/*.go`、Logging、Proxy transport、Router 和 race 测试 |
+| 修改健康检查或退出 | `internal/interfaces/http/handler/health`、`internal/infrastructure/server/http`、`cmd/proxy/main.go` |
+| 修改依赖组装 | `internal/di/provider`、`modules`、`wire.go`，然后重新生成 `wire_gen.go` |
+| 修改版本号 | `internal/application/runtime/version.go`，并检查 Router 与页面展示 |
 
 ## 测试与提交前检查
 

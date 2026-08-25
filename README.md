@@ -248,24 +248,27 @@ OpenAI 的 Input/Output 对应 `input_tokens`/`output_tokens` 或 `prompt_tokens
 
 ```
 llm-proxy/
-├── cmd/proxy/main.go              # 入口：加载配置、初始化、优雅关闭
+├── cmd/proxy/main.go              # 入口：加载配置、调用 DI、优雅关闭
 ├── internal/
-│   ├── config/                    # 配置加载（viper）
-│   ├── logger/                    # 日志初始化（zap + file-rotatelogs）
-│   ├── middleware/
-│   │   ├── logging.go             # 请求日志中间件
-│   │   └── ratelimit.go           # 限流中间件
-│   ├── proxy/
-│   │   ├── proxy.go               # 通用反向代理核心
-│   │   ├── openai.go              # OpenAI 反向代理
-│   │   └── anthropic.go           # Anthropic 反向代理
-│   ├── observability/              # OTel Runtime、HTTP 插桩和业务 metrics
-│   ├── tokenusage/                 # JSON/SSE usage 解析与归一化
-│   ├── server/                    # HTTP 服务器组装与路由
-│   └── dashboard/                 # 原子统计、Web 控制台 handler 与内嵌 HTML
+│   ├── domain/                    # 统一网关领域规则（透明代理不进入领域）
+│   ├── application/runtime/       # Readiness、Version、Usage Observer 契约
+│   ├── interfaces/http/
+│   │   ├── handler/               # Dashboard 与健康检查 HTTP 适配器
+│   │   ├── middleware/            # 日志、限流、统计与 Token Observer
+│   │   └── router/                # 路由和中间件组装
+│   ├── infrastructure/
+│   │   ├── config/                # Viper、YAML、.env 配置加载
+│   │   ├── logger/                # Zap 与日志文件轮转
+│   │   ├── observability/         # OTel Runtime、HTTP 插桩和业务 metrics
+│   │   ├── proxy/                 # 透明 ReverseProxy 与 Token usage 解析
+│   │   └── server/http/           # HTTP 监听与关闭生命周期
+│   ├── di/                        # Google Wire Provider 与唯一组装根
+│   └── architecture/              # DDD 依赖边界自动测试
 ├── config.yaml                    # 配置文件
 └── Dockerfile                     # 多阶段构建
 ```
+
+生产代码采用 DDD/Clean Architecture 依赖方向：`interfaces → application → domain`。基础设施层实现内层端口，不依赖 HTTP 接口层；`internal/di` 是唯一同时连接接口层与基础设施层的组装根。现有 `/openai/*`、`/anthropic/*` 透明代理属于基础设施适配器，不经过统一推理领域模型。
 
 ## 请求处理流程
 
@@ -300,6 +303,7 @@ llm-proxy/
 | `golang.org/x/time/rate` | Token Bucket 限流 |
 | `github.com/spf13/viper` | YAML 配置加载 |
 | `github.com/joho/godotenv` | `.env` 文件加载 |
+| `github.com/google/wire` | 编译期依赖注入代码生成 |
 | `go.opentelemetry.io/otel` | Traces、metrics、上下文传播与 SDK |
 | `go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp` | HTTP server/client 自动插桩 |
 
