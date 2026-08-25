@@ -3,6 +3,8 @@ module github.com/goairix/llm-proxy
 go 1.25.0
 
 require (
+	github.com/go-gormigrate/gormigrate/v2 v2.1.6
+	github.com/google/uuid v1.6.0
 	github.com/google/wire v0.7.0
 	github.com/joho/godotenv v1.5.1
 	github.com/lestrrat-go/file-rotatelogs v2.4.0+incompatible
@@ -19,6 +21,8 @@ require (
 	go.uber.org/zap v1.27.1
 	golang.org/x/time v0.14.0
 	google.golang.org/protobuf v1.36.11
+	gorm.io/driver/postgres v1.6.2
+	gorm.io/gorm v1.31.2
 )
 
 require (
@@ -26,11 +30,9 @@ require (
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/felixge/httpsnoop v1.1.0 // indirect
 	github.com/fsnotify/fsnotify v1.9.0 // indirect
-	github.com/go-gormigrate/gormigrate/v2 v2.1.6 // indirect
 	github.com/go-logr/logr v1.4.4 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/go-viper/mapstructure/v2 v2.4.0 // indirect
-	github.com/google/uuid v1.6.0 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.29.0 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
@@ -59,6 +61,4 @@ require (
 	google.golang.org/genproto/googleapis/api v0.0.0-20260803160001-6ac0973c030d // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260803160001-6ac0973c030d // indirect
 	google.golang.org/grpc v1.83.0 // indirect
-	gorm.io/driver/postgres v1.6.2 // indirect
-	gorm.io/gorm v1.31.2 // indirect
 )
