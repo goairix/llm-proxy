@@ -1,16 +1,25 @@
 package config
 
 import (
+	"encoding/base64"
+	"fmt"
+	"strings"
+	"time"
+
 	"github.com/spf13/viper"
 )
 
 // Config is the root configuration struct.
 type Config struct {
-	Server        ServerConfig        `mapstructure:"server"`
-	Log           LogConfig           `mapstructure:"log"`
-	RateLimit     RateLimitConfig     `mapstructure:"rate_limit"`
-	Providers     ProvidersConfig     `mapstructure:"providers"`
-	Observability ObservabilityConfig `mapstructure:"observability"`
+	Server               ServerConfig               `mapstructure:"server"`
+	Log                  LogConfig                  `mapstructure:"log"`
+	RateLimit            RateLimitConfig            `mapstructure:"rate_limit"`
+	Providers            ProvidersConfig            `mapstructure:"providers"`
+	Observability        ObservabilityConfig        `mapstructure:"observability"`
+	Gateway              GatewayConfig              `mapstructure:"gateway"`
+	Database             DatabaseConfig             `mapstructure:"database"`
+	ControlPlane         ControlPlaneConfig         `mapstructure:"control_plane"`
+	CredentialEncryption CredentialEncryptionConfig `mapstructure:"credential_encryption"`
 }
 
 // ServerConfig holds HTTP server settings.
@@ -60,6 +69,35 @@ type ObservabilityConfig struct {
 	MetricsExportIntervalSeconds int     `mapstructure:"metrics_export_interval_seconds"`
 }
 
+// GatewayConfig controls the unified gateway runtime.
+type GatewayConfig struct {
+	Enabled          bool          `mapstructure:"enabled"`
+	SnapshotInterval time.Duration `mapstructure:"snapshot_interval"`
+	SnapshotTimeout  time.Duration `mapstructure:"snapshot_timeout"`
+	RetryBackoff     time.Duration `mapstructure:"retry_backoff"`
+}
+
+// DatabaseConfig holds the unified gateway persistence settings.
+type DatabaseConfig struct {
+	Driver             string        `mapstructure:"driver"`
+	DSN                string        `mapstructure:"dsn"`
+	MaxIdleConnections int           `mapstructure:"max_idle_connections"`
+	MaxOpenConnections int           `mapstructure:"max_open_connections"`
+	ConnectionLifetime time.Duration `mapstructure:"connection_lifetime"`
+	ConnectTimeout     time.Duration `mapstructure:"connect_timeout"`
+}
+
+// ControlPlaneConfig holds authentication settings for control plane APIs.
+type ControlPlaneConfig struct {
+	Token string `mapstructure:"token"`
+}
+
+// CredentialEncryptionConfig holds the versioned master-key ring.
+type CredentialEncryptionConfig struct {
+	CurrentKeyVersion string            `mapstructure:"current_key_version"`
+	Keys              map[string]string `mapstructure:"keys"`
+}
+
 // Load reads configuration from the YAML file at path and returns a Config.
 // If the file does not exist, defaults are still applied and no error is returned.
 func Load(path string) (*Config, error) {
@@ -84,6 +122,19 @@ func Load(path string) (*Config, error) {
 	v.SetDefault("observability.otlp_endpoint", "http://localhost:4318")
 	v.SetDefault("observability.trace_sample_ratio", 0.1)
 	v.SetDefault("observability.metrics_export_interval_seconds", 15)
+	v.SetDefault("gateway.enabled", false)
+	v.SetDefault("gateway.snapshot_interval", 5*time.Second)
+	v.SetDefault("gateway.snapshot_timeout", 3*time.Second)
+	v.SetDefault("gateway.retry_backoff", 5*time.Second)
+	v.SetDefault("database.driver", "postgres")
+	v.SetDefault("database.dsn", "")
+	v.SetDefault("database.max_idle_connections", 5)
+	v.SetDefault("database.max_open_connections", 20)
+	v.SetDefault("database.connection_lifetime", 30*time.Minute)
+	v.SetDefault("database.connect_timeout", 3*time.Second)
+	v.SetDefault("control_plane.token", "")
+	v.SetDefault("credential_encryption.current_key_version", "")
+	v.SetDefault("credential_encryption.keys", map[string]string{})
 	if err := bindEnvironment(v); err != nil {
 		return nil, err
 	}
@@ -111,8 +162,51 @@ func Load(path string) (*Config, error) {
 	if err := applyComplexEnvironment(cfg); err != nil {
 		return nil, err
 	}
+	if err := validateConfig(cfg); err != nil {
+		return nil, err
+	}
 
 	return cfg, nil
+}
+
+func validateConfig(cfg *Config) error {
+	for version, encoded := range cfg.CredentialEncryption.Keys {
+		key, err := base64.StdEncoding.DecodeString(encoded)
+		if err != nil {
+			return fmt.Errorf("%s[%s]: decode base64: %w", envCredentialKeys, version, err)
+		}
+		if len(key) != 32 {
+			return fmt.Errorf("%s[%s]: decoded length is %d, want 32", envCredentialKeys, version, len(key))
+		}
+	}
+	if !cfg.Gateway.Enabled {
+		return nil
+	}
+	if cfg.Database.Driver != "postgres" {
+		return fmt.Errorf("database driver must be postgres")
+	}
+	if strings.TrimSpace(cfg.Database.DSN) == "" {
+		return fmt.Errorf("database dsn is required when gateway is enabled")
+	}
+	if len(cfg.ControlPlane.Token) < 24 {
+		return fmt.Errorf("control plane token must contain at least 24 characters")
+	}
+	if cfg.CredentialEncryption.CurrentKeyVersion == "" {
+		return fmt.Errorf("credential encryption current key version is required")
+	}
+	if _, ok := cfg.CredentialEncryption.Keys[cfg.CredentialEncryption.CurrentKeyVersion]; !ok {
+		return fmt.Errorf("credential encryption current key version %q is not present in keyring", cfg.CredentialEncryption.CurrentKeyVersion)
+	}
+	if cfg.Gateway.SnapshotInterval <= 0 || cfg.Gateway.SnapshotTimeout <= 0 || cfg.Gateway.RetryBackoff <= 0 {
+		return fmt.Errorf("gateway durations must be positive")
+	}
+	if cfg.Database.MaxIdleConnections < 0 || cfg.Database.MaxOpenConnections <= 0 || cfg.Database.MaxIdleConnections > cfg.Database.MaxOpenConnections {
+		return fmt.Errorf("database connection pool limits are invalid")
+	}
+	if cfg.Database.ConnectionLifetime <= 0 || cfg.Database.ConnectTimeout <= 0 {
+		return fmt.Errorf("database durations must be positive")
+	}
+	return nil
 }
 
 // isNotFoundError reports whether err indicates that the config file was not found.

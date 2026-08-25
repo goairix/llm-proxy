@@ -26,6 +26,19 @@ var configEnvNames = []string{
 	"LLM_PROXY_OBSERVABILITY_OTLP_ENDPOINT",
 	"LLM_PROXY_OBSERVABILITY_TRACE_SAMPLE_RATIO",
 	"LLM_PROXY_OBSERVABILITY_METRICS_EXPORT_INTERVAL_SECONDS",
+	"LLM_PROXY_GATEWAY_ENABLED",
+	"LLM_PROXY_GATEWAY_SNAPSHOT_INTERVAL",
+	"LLM_PROXY_GATEWAY_SNAPSHOT_TIMEOUT",
+	"LLM_PROXY_GATEWAY_RETRY_BACKOFF",
+	"LLM_PROXY_DATABASE_DRIVER",
+	"LLM_PROXY_DATABASE_DSN",
+	"LLM_PROXY_DATABASE_MAX_IDLE_CONNECTIONS",
+	"LLM_PROXY_DATABASE_MAX_OPEN_CONNECTIONS",
+	"LLM_PROXY_DATABASE_CONNECTION_LIFETIME",
+	"LLM_PROXY_DATABASE_CONNECT_TIMEOUT",
+	"LLM_PROXY_CONTROL_PLANE_TOKEN",
+	"LLM_PROXY_CREDENTIAL_ENCRYPTION_CURRENT_KEY_VERSION",
+	"LLM_PROXY_CREDENTIAL_ENCRYPTION_KEYS",
 }
 
 func isolateConfigEnvironment(t *testing.T) string {
@@ -458,5 +471,88 @@ func TestLoadInvalidComplexEnvironment(t *testing.T) {
 				t.Fatalf("Load() error = %v, want error containing %s", err, name)
 			}
 		})
+	}
+}
+
+func TestLoadGatewayDefaultsDisabled(t *testing.T) {
+	workDir := isolateConfigEnvironment(t)
+
+	cfg, err := Load(filepath.Join(workDir, "missing.yaml"))
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.Gateway.Enabled {
+		t.Fatal("Gateway.Enabled = true, want false")
+	}
+	if cfg.Database.Driver != "postgres" {
+		t.Fatalf("Database.Driver = %q, want postgres", cfg.Database.Driver)
+	}
+}
+
+func TestLoadGatewayEnvironment(t *testing.T) {
+	workDir := isolateConfigEnvironment(t)
+	t.Setenv("LLM_PROXY_GATEWAY_ENABLED", "true")
+	t.Setenv("LLM_PROXY_GATEWAY_SNAPSHOT_INTERVAL", "7s")
+	t.Setenv("LLM_PROXY_GATEWAY_SNAPSHOT_TIMEOUT", "4s")
+	t.Setenv("LLM_PROXY_GATEWAY_RETRY_BACKOFF", "9s")
+	t.Setenv("LLM_PROXY_DATABASE_DRIVER", "postgres")
+	t.Setenv("LLM_PROXY_DATABASE_DSN", "postgres://user:pass@127.0.0.1:5432/test?sslmode=disable")
+	t.Setenv("LLM_PROXY_DATABASE_MAX_IDLE_CONNECTIONS", "7")
+	t.Setenv("LLM_PROXY_DATABASE_MAX_OPEN_CONNECTIONS", "31")
+	t.Setenv("LLM_PROXY_DATABASE_CONNECTION_LIFETIME", "45m")
+	t.Setenv("LLM_PROXY_DATABASE_CONNECT_TIMEOUT", "6s")
+	t.Setenv("LLM_PROXY_CONTROL_PLANE_TOKEN", "test-control-token-with-enough-entropy")
+	t.Setenv("LLM_PROXY_CREDENTIAL_ENCRYPTION_CURRENT_KEY_VERSION", "v1")
+	t.Setenv("LLM_PROXY_CREDENTIAL_ENCRYPTION_KEYS", `{"v1":"MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="}`)
+
+	cfg, err := Load(filepath.Join(workDir, "missing.yaml"))
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if !cfg.Gateway.Enabled || cfg.Gateway.SnapshotInterval.String() != "7s" || cfg.Gateway.SnapshotTimeout.String() != "4s" || cfg.Gateway.RetryBackoff.String() != "9s" {
+		t.Fatalf("Gateway = %+v", cfg.Gateway)
+	}
+	if cfg.Database.Driver != "postgres" || cfg.Database.MaxIdleConnections != 7 || cfg.Database.MaxOpenConnections != 31 {
+		t.Fatalf("Database = %+v", cfg.Database)
+	}
+	if cfg.Database.ConnectionLifetime.String() != "45m0s" || cfg.Database.ConnectTimeout.String() != "6s" {
+		t.Fatalf("Database durations = %+v", cfg.Database)
+	}
+	if cfg.ControlPlane.Token != "test-control-token-with-enough-entropy" {
+		t.Fatalf("ControlPlane.Token was not loaded")
+	}
+	if cfg.CredentialEncryption.CurrentKeyVersion != "v1" || len(cfg.CredentialEncryption.Keys) != 1 {
+		t.Fatalf("CredentialEncryption = %+v", cfg.CredentialEncryption)
+	}
+}
+
+func TestLoadRejectsInvalidCredentialKeyring(t *testing.T) {
+	tests := []struct {
+		name    string
+		keyring string
+	}{
+		{name: "invalid json", keyring: "not-json"},
+		{name: "invalid base64", keyring: `{"v1":"%%%"}`},
+		{name: "short key", keyring: `{"v1":"c2hvcnQ="}`},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			workDir := isolateConfigEnvironment(t)
+			t.Setenv("LLM_PROXY_CREDENTIAL_ENCRYPTION_KEYS", tc.keyring)
+			_, err := Load(filepath.Join(workDir, "missing.yaml"))
+			if err == nil || !strings.Contains(err.Error(), "LLM_PROXY_CREDENTIAL_ENCRYPTION_KEYS") {
+				t.Fatalf("Load() error = %v", err)
+			}
+		})
+	}
+}
+
+func TestLoadRejectsEnabledGatewayWithoutRequiredSecrets(t *testing.T) {
+	workDir := isolateConfigEnvironment(t)
+	t.Setenv("LLM_PROXY_GATEWAY_ENABLED", "true")
+
+	_, err := Load(filepath.Join(workDir, "missing.yaml"))
+	if err == nil || !strings.Contains(err.Error(), "database dsn") {
+		t.Fatalf("Load() error = %v, want missing database dsn", err)
 	}
 }

@@ -1,11 +1,13 @@
 package config
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"strconv"
+	"time"
 
 	"github.com/joho/godotenv"
 	"github.com/spf13/viper"
@@ -29,6 +31,19 @@ const (
 	envObservabilityOTLPEndpoint  = "LLM_PROXY_OBSERVABILITY_OTLP_ENDPOINT"
 	envObservabilitySampleRatio   = "LLM_PROXY_OBSERVABILITY_TRACE_SAMPLE_RATIO"
 	envObservabilityMetricSeconds = "LLM_PROXY_OBSERVABILITY_METRICS_EXPORT_INTERVAL_SECONDS"
+	envGatewayEnabled             = "LLM_PROXY_GATEWAY_ENABLED"
+	envGatewaySnapshotInterval    = "LLM_PROXY_GATEWAY_SNAPSHOT_INTERVAL"
+	envGatewaySnapshotTimeout     = "LLM_PROXY_GATEWAY_SNAPSHOT_TIMEOUT"
+	envGatewayRetryBackoff        = "LLM_PROXY_GATEWAY_RETRY_BACKOFF"
+	envDatabaseDriver             = "LLM_PROXY_DATABASE_DRIVER"
+	envDatabaseDSN                = "LLM_PROXY_DATABASE_DSN"
+	envDatabaseMaxIdleConnections = "LLM_PROXY_DATABASE_MAX_IDLE_CONNECTIONS"
+	envDatabaseMaxOpenConnections = "LLM_PROXY_DATABASE_MAX_OPEN_CONNECTIONS"
+	envDatabaseConnectionLifetime = "LLM_PROXY_DATABASE_CONNECTION_LIFETIME"
+	envDatabaseConnectTimeout     = "LLM_PROXY_DATABASE_CONNECT_TIMEOUT"
+	envControlPlaneToken          = "LLM_PROXY_CONTROL_PLANE_TOKEN"
+	envCredentialCurrentVersion   = "LLM_PROXY_CREDENTIAL_ENCRYPTION_CURRENT_KEY_VERSION"
+	envCredentialKeys             = "LLM_PROXY_CREDENTIAL_ENCRYPTION_KEYS"
 )
 
 type envBinding struct {
@@ -53,6 +68,18 @@ var envBindings = []envBinding{
 	{key: "observability.otlp_endpoint", name: envObservabilityOTLPEndpoint},
 	{key: "observability.trace_sample_ratio", name: envObservabilitySampleRatio, validate: validateFloat},
 	{key: "observability.metrics_export_interval_seconds", name: envObservabilityMetricSeconds, validate: validateInt},
+	{key: "gateway.enabled", name: envGatewayEnabled, validate: validateBool},
+	{key: "gateway.snapshot_interval", name: envGatewaySnapshotInterval, validate: validateDuration},
+	{key: "gateway.snapshot_timeout", name: envGatewaySnapshotTimeout, validate: validateDuration},
+	{key: "gateway.retry_backoff", name: envGatewayRetryBackoff, validate: validateDuration},
+	{key: "database.driver", name: envDatabaseDriver},
+	{key: "database.dsn", name: envDatabaseDSN},
+	{key: "database.max_idle_connections", name: envDatabaseMaxIdleConnections, validate: validateInt},
+	{key: "database.max_open_connections", name: envDatabaseMaxOpenConnections, validate: validateInt},
+	{key: "database.connection_lifetime", name: envDatabaseConnectionLifetime, validate: validateDuration},
+	{key: "database.connect_timeout", name: envDatabaseConnectTimeout, validate: validateDuration},
+	{key: "control_plane.token", name: envControlPlaneToken},
+	{key: "credential_encryption.current_key_version", name: envCredentialCurrentVersion},
 }
 
 func loadDotEnv() error {
@@ -92,6 +119,11 @@ func validateFloat(value string) error {
 	return err
 }
 
+func validateDuration(value string) error {
+	_, err := time.ParseDuration(value)
+	return err
+}
+
 func applyComplexEnvironment(cfg *Config) error {
 	if value, ok := os.LookupEnv(envRateLimitWhitelist); ok {
 		if err := json.Unmarshal([]byte(value), &cfg.RateLimit.Whitelist); err != nil {
@@ -101,6 +133,16 @@ func applyComplexEnvironment(cfg *Config) error {
 	if value, ok := os.LookupEnv(envRateLimitOverrides); ok {
 		if err := json.Unmarshal([]byte(value), &cfg.RateLimit.Overrides); err != nil {
 			return fmt.Errorf("%s: %w", envRateLimitOverrides, err)
+		}
+	}
+	if value, ok := os.LookupEnv(envCredentialKeys); ok {
+		if err := json.Unmarshal([]byte(value), &cfg.CredentialEncryption.Keys); err != nil {
+			return fmt.Errorf("%s: %w", envCredentialKeys, err)
+		}
+		for version, encoded := range cfg.CredentialEncryption.Keys {
+			if _, err := base64.StdEncoding.DecodeString(encoded); err != nil {
+				return fmt.Errorf("%s[%s]: %w", envCredentialKeys, version, err)
+			}
 		}
 	}
 	return nil
