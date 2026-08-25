@@ -1,0 +1,9 @@
+{
+  "model": "assistant",
+  "max_tokens": 0,
+  "system": "Be concise.",
+  "messages": [{"role": "user", "content": "hello"}],
+  "temperature": 0,
+  "stop_sequences": [],
+  "unknown_client_field": true
+}
