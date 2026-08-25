@@ -28,6 +28,9 @@ func main() {
 		log.Fatalf("failed to initialize application: %v", err)
 	}
 	defer app.Logger.Sync() //nolint:errcheck
+	processContext, stopProcess := context.WithCancel(context.Background())
+	defer stopProcess()
+	app.ControlPlane.Start(processContext)
 
 	// Start serving in a background goroutine.
 	go func() {
@@ -45,10 +48,33 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	if err := app.Server.Shutdown(ctx); err != nil {
-		app.Logger.Error("shutdown error", zap.Error(err))
+	shutdownApplication(ctx, app.Logger, app.Server, app.ControlPlane, app.Telemetry)
+}
+
+type shutdownServer interface {
+	MarkNotReady()
+	Shutdown(context.Context) error
+}
+
+type shutdownControlPlane interface {
+	Stop()
+	Close() error
+}
+
+type shutdownTelemetry interface {
+	Shutdown(context.Context) error
+}
+
+func shutdownApplication(ctx context.Context, logger *zap.Logger, server shutdownServer, controlPlane shutdownControlPlane, telemetry shutdownTelemetry) {
+	server.MarkNotReady()
+	controlPlane.Stop()
+	if err := server.Shutdown(ctx); err != nil {
+		logger.Error("shutdown error", zap.Error(err))
 	}
-	if err := app.Telemetry.Shutdown(ctx); err != nil {
-		app.Logger.Error("telemetry shutdown error", zap.Error(err))
+	if err := controlPlane.Close(); err != nil {
+		logger.Error("database shutdown error", zap.Error(err))
+	}
+	if err := telemetry.Shutdown(ctx); err != nil {
+		logger.Error("telemetry shutdown error", zap.Error(err))
 	}
 }

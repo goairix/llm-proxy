@@ -1,6 +1,7 @@
 package di
 
 import (
+	"github.com/goairix/llm-proxy/internal/di/provider"
 	"github.com/goairix/llm-proxy/internal/infrastructure/observability"
 	httpserver "github.com/goairix/llm-proxy/internal/infrastructure/server/http"
 	"go.uber.org/zap"
@@ -8,7 +9,8 @@ import (
 
 // App contains the process lifecycle dependencies assembled by Wire.
 type App struct {
-	Server    *httpserver.Server
-	Telemetry *observability.Runtime
-	Logger    *zap.Logger
+	Server       *httpserver.Server
+	Telemetry    *observability.Runtime
+	Logger       *zap.Logger
+	ControlPlane *provider.ControlPlaneRuntime
 }

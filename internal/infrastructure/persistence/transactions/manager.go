@@ -2,10 +2,14 @@ package transactions
 
 import (
 	"context"
+	"errors"
+	"fmt"
 
 	"gorm.io/gorm"
 
+	sharederrors "github.com/goairix/llm-proxy/internal/domain/shared/errors"
 	sharedport "github.com/goairix/llm-proxy/internal/domain/shared/port"
+	"github.com/goairix/llm-proxy/internal/infrastructure/persistence/database"
 )
 
 // DBProvider supplies the current GORM connection or a stable availability error.
@@ -36,11 +40,34 @@ func (m *Manager) Transaction(ctx context.Context, fn func(context.Context) erro
 	}
 	db, err := m.provider.DB(ctx)
 	if err != nil {
+		if errors.Is(err, database.ErrUnavailable) {
+			return fmt.Errorf("%w: database unavailable: %w", sharederrors.ErrDependencyUnavailable, err)
+		}
 		return err
 	}
-	return db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		return fn(context.WithValue(ctx, transactionContextKey{}, tx))
-	})
+	tx := db.WithContext(ctx).Begin()
+	if tx.Error != nil {
+		return transactionBoundaryError(tx.Error)
+	}
+	completed := false
+	defer func() {
+		if !completed {
+			_ = tx.Rollback().Error
+		}
+	}()
+	if err := fn(context.WithValue(ctx, transactionContextKey{}, tx)); err != nil {
+		return err
+	}
+	commitErr := tx.Commit().Error
+	completed = true
+	return transactionBoundaryError(commitErr)
+}
+
+func transactionBoundaryError(err error) error {
+	if err == nil {
+		return nil
+	}
+	return fmt.Errorf("%w: database transaction boundary failed: %w", sharederrors.ErrDependencyUnavailable, err)
 }
 
 // DB returns the transaction in context, falling back to the runtime connection.

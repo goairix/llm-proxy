@@ -35,12 +35,17 @@ func Initialize(ctx context.Context, cfg *config.Config) (*App, error) {
 	if err != nil {
 		return nil, err
 	}
-	rootHandler := provider.NewRootHandler(cfg, logger, runtime, readiness, stats, usageObserverFactory, openAIHandler, anthropicHandler)
+	controlPlaneRuntime, err := provider.NewControlPlaneRuntime(cfg, logger)
+	if err != nil {
+		return nil, err
+	}
+	rootHandler := provider.NewRootHandler(cfg, logger, runtime, readiness, stats, usageObserverFactory, openAIHandler, anthropicHandler, controlPlaneRuntime)
 	server := provider.NewHTTPServer(cfg, rootHandler, logger, readiness)
 	app := &App{
-		Server:    server,
-		Telemetry: runtime,
-		Logger:    logger,
+		Server:       server,
+		Telemetry:    runtime,
+		Logger:       logger,
+		ControlPlane: controlPlaneRuntime,
 	}
 	return app, nil
 }

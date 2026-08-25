@@ -52,6 +52,7 @@ func NewRootHandler(
 	observers appRuntime.UsageObserverFactory,
 	openAI OpenAIHandler,
 	anthropic AnthropicHandler,
+	controlPlane *ControlPlaneRuntime,
 ) RootHandler {
 	baseURL := cfg.Server.ShowBaseURL
 	if baseURL == "" {
@@ -70,6 +71,8 @@ func NewRootHandler(
 		ObserverFactory: observers,
 		OpenAIProxy:     openAI.Handler,
 		AnthropicProxy:  anthropic.Handler,
+		ControlPlane:    controlPlane.Handler,
+		ControlAuth:     controlPlane.Authorizer,
 	})
 	return RootHandler{Handler: handler}
 }

@@ -10,6 +10,9 @@ import (
 
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
+
+	sharederrors "github.com/goairix/llm-proxy/internal/domain/shared/errors"
+	"github.com/goairix/llm-proxy/internal/infrastructure/persistence/database"
 )
 
 func TestManagerTransactionSharesAndReusesTransaction(t *testing.T) {
@@ -66,6 +69,48 @@ func TestManagerPropagatesUnavailableProvider(t *testing.T) {
 	}
 	if _, err := manager.DB(context.Background()); !errors.Is(err, want) {
 		t.Fatalf("DB() error = %v; want unavailable", err)
+	}
+}
+
+func TestManagerMapsDatabaseUnavailableAtTransactionBoundary(t *testing.T) {
+	manager := NewManager(staticProvider{err: database.ErrUnavailable})
+
+	err := manager.Transaction(context.Background(), func(context.Context) error { return nil })
+
+	if !errors.Is(err, sharederrors.ErrDependencyUnavailable) {
+		t.Fatalf("Transaction() error = %v; want ErrDependencyUnavailable", err)
+	}
+}
+
+func TestManagerMapsBeginFailureAfterDatabaseWasPublished(t *testing.T) {
+	sqlDB := sql.OpenDB(failingBeginConnector{})
+	db, err := gorm.Open(postgres.New(postgres.Config{Conn: sqlDB}), &gorm.Config{DisableAutomaticPing: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = sqlDB.Close() })
+	manager := NewManager(staticProvider{db: db})
+
+	err = manager.Transaction(context.Background(), func(context.Context) error { return nil })
+
+	if !errors.Is(err, sharederrors.ErrDependencyUnavailable) {
+		t.Fatalf("Transaction() error = %v; want ErrDependencyUnavailable", err)
+	}
+}
+
+func TestManagerMapsCommitFailureAfterDatabaseWasPublished(t *testing.T) {
+	sqlDB := sql.OpenDB(failingCommitConnector{})
+	db, err := gorm.Open(postgres.New(postgres.Config{Conn: sqlDB}), &gorm.Config{DisableAutomaticPing: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = sqlDB.Close() })
+	manager := NewManager(staticProvider{db: db})
+
+	err = manager.Transaction(context.Background(), func(context.Context) error { return nil })
+
+	if !errors.Is(err, sharederrors.ErrDependencyUnavailable) {
+		t.Fatalf("Transaction() error = %v; want ErrDependencyUnavailable", err)
 	}
 }
 
@@ -130,3 +175,48 @@ func (t *transactionTx) Rollback() error {
 	t.state.rollbacks.Add(1)
 	return nil
 }
+
+type failingBeginConnector struct{}
+
+func (failingBeginConnector) Connect(context.Context) (driver.Conn, error) {
+	return failingBeginConn{}, nil
+}
+func (failingBeginConnector) Driver() driver.Driver { return failingBeginDriver{} }
+
+type failingBeginDriver struct{}
+
+func (failingBeginDriver) Open(string) (driver.Conn, error) { return failingBeginConn{}, nil }
+
+type failingBeginConn struct{}
+
+func (failingBeginConn) Prepare(string) (driver.Stmt, error) {
+	return nil, errors.New("not implemented")
+}
+func (failingBeginConn) Close() error              { return nil }
+func (failingBeginConn) Begin() (driver.Tx, error) { return nil, driver.ErrBadConn }
+
+type failingCommitConnector struct{}
+
+func (failingCommitConnector) Connect(context.Context) (driver.Conn, error) {
+	return failingCommitConn{}, nil
+}
+func (failingCommitConnector) Driver() driver.Driver { return failingCommitDriver{} }
+
+type failingCommitDriver struct{}
+
+func (failingCommitDriver) Open(string) (driver.Conn, error) { return failingCommitConn{}, nil }
+
+type failingCommitConn struct{}
+
+func (failingCommitConn) Prepare(string) (driver.Stmt, error) {
+	return nil, errors.New("not implemented")
+}
+func (failingCommitConn) Close() error { return nil }
+func (failingCommitConn) Begin() (driver.Tx, error) {
+	return failingCommitTx{}, nil
+}
+
+type failingCommitTx struct{}
+
+func (failingCommitTx) Commit() error   { return driver.ErrBadConn }
+func (failingCommitTx) Rollback() error { return nil }

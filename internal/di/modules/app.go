@@ -14,6 +14,7 @@ var AppSet = wire.NewSet(
 	provider.NewObserverFactory,
 	provider.NewOpenAIHandler,
 	provider.NewAnthropicHandler,
+	provider.NewControlPlaneRuntime,
 	provider.NewRootHandler,
 	provider.NewHTTPServer,
 )
