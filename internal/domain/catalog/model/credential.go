@@ -41,6 +41,12 @@ func NewProviderCredential(providerID uuid.UUID, scope Scope, sealed SealedCrede
 	if err != nil {
 		return nil, err
 	}
+	return NewProviderCredentialWithEntity(entity, providerID, scope, sealed)
+}
+
+// NewProviderCredentialWithEntity completes a credential whose UUIDv7 identity was
+// allocated before encryption so the identity can be authenticated as AAD.
+func NewProviderCredentialWithEntity(entity sharedmodel.Entity, providerID uuid.UUID, scope Scope, sealed SealedCredential) (*ProviderCredential, error) {
 	credential := &ProviderCredential{
 		Entity:     entity,
 		ProviderID: providerID,
