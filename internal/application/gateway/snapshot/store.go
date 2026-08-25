@@ -23,6 +23,9 @@ func (s *Store) Publish(next *RuntimeSnapshot) {
 	if next == nil {
 		panic("publish nil runtime snapshot")
 	}
+	if !next.compiled {
+		panic("publish runtime snapshot not created by compiler")
+	}
 	s.current.Store(next)
 }
 

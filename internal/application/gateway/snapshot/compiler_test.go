@@ -61,6 +61,20 @@ func TestCompilerExcludesDisabledTenantResources(t *testing.T) {
 	}
 }
 
+func TestCompilerAcceptsDisabledAliasBeforeTargetPreparation(t *testing.T) {
+	config := validSourceConfig(t)
+	config.ModelAliases[0].Status = sharedmodel.StatusDisabled
+	config.RouteTargets = nil
+
+	compiled, err := NewCompiler().Compile(config, fixedNow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(compiled.routes) != 0 {
+		t.Fatalf("routes = %d; want none for disabled alias", len(compiled.routes))
+	}
+}
+
 func TestCompilerRejectsInvalidRoutingGraph(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -76,6 +90,16 @@ func TestCompilerRejectsInvalidRoutingGraph(t *testing.T) {
 		{name: "multiple active targets", mutate: func(config *SourceConfig) {
 			second := config.RouteTargets[0]
 			second.Entity, _ = sharedmodel.NewEntity()
+			config.RouteTargets = append(config.RouteTargets, second)
+		}, want: "没有唯一启用"},
+		{name: "multiple active targets including inactive deployment", mutate: func(config *SourceConfig) {
+			inactive := config.Deployments[0]
+			inactive.Entity, _ = sharedmodel.NewEntity()
+			inactive.Status = sharedmodel.StatusDisabled
+			config.Deployments = append(config.Deployments, inactive)
+			second := config.RouteTargets[0]
+			second.Entity, _ = sharedmodel.NewEntity()
+			second.DeploymentID = inactive.ID
 			config.RouteTargets = append(config.RouteTargets, second)
 		}, want: "没有唯一启用"},
 	}
@@ -160,6 +184,7 @@ func validSourceConfig(t *testing.T) SourceConfig {
 		catalogmodel.CapabilitySet{Text: true, Streaming: true},
 	)
 	alias, _ := catalogmodel.NewModelAlias(project.ID, "assistant")
+	alias.Status = sharedmodel.StatusActive
 	target, _ := catalogmodel.NewRouteTarget(alias.ID, deployment.ID, 0, 100)
 	return SourceConfig{
 		Revision: 7, Organizations: []tenantmodel.Organization{*organization}, Projects: []tenantmodel.Project{*project},

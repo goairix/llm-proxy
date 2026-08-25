@@ -73,6 +73,7 @@ func TestCatalogRepositoriesWithPostgres(t *testing.T) {
 	organizations := tenantrepo.NewOrganizationRepository(manager)
 	projects := tenantrepo.NewProjectRepository(manager)
 	providers := NewProviderRepository(manager)
+	credentials := NewProviderCredentialRepository(manager)
 	aliases := NewModelAliasRepository(manager)
 	targets := NewRouteTargetRepository(manager)
 	deployments := NewDeploymentRepository(manager)
@@ -82,6 +83,11 @@ func TestCatalogRepositoriesWithPostgres(t *testing.T) {
 	project, _ := tenantmodel.NewProject(organization.ID, "Production")
 	provider, _ := catalogmodel.NewProvider("Fake", "fake")
 	deployment, _ := catalogmodel.NewDeployment(provider.ID, nil, "fake", "fake-model", "fake", catalogmodel.Scope{Kind: catalogmodel.ScopePlatform}, catalogmodel.CapabilitySet{Text: true})
+	credential, _ := catalogmodel.NewProviderCredential(provider.ID, catalogmodel.Scope{Kind: catalogmodel.ScopePlatform}, catalogmodel.SealedCredential{
+		KeyVersion: "v1", WrappedKeyNonce: []byte{1}, WrappedDataKey: []byte{2}, PayloadNonce: []byte{3}, Ciphertext: []byte{4},
+	})
+	credentialID := credential.ID
+	credentialDeployment, _ := catalogmodel.NewDeployment(provider.ID, &credentialID, "credential", "credential-model", "fake", catalogmodel.Scope{Kind: catalogmodel.ScopePlatform}, catalogmodel.CapabilitySet{Text: true})
 	alias, _ := catalogmodel.NewModelAlias(project.ID, "assistant")
 	target, _ := catalogmodel.NewRouteTarget(alias.ID, deployment.ID, 0, 100)
 	ctx := context.Background()
@@ -89,7 +95,9 @@ func TestCatalogRepositoriesWithPostgres(t *testing.T) {
 		func() error { return organizations.Save(ctx, organization) },
 		func() error { return projects.Save(ctx, project) },
 		func() error { return providers.Save(ctx, provider) },
+		func() error { return credentials.Save(ctx, credential) },
 		func() error { return deployments.Save(ctx, deployment) },
+		func() error { return deployments.Save(ctx, credentialDeployment) },
 		func() error { return aliases.Save(ctx, alias) },
 		func() error { return targets.Save(ctx, target) },
 	} {
@@ -99,6 +107,15 @@ func TestCatalogRepositoriesWithPostgres(t *testing.T) {
 	}
 	if got, err := targets.ListByModelAlias(ctx, alias.ID); err != nil || len(got) != 1 || got[0].DeploymentID != deployment.ID {
 		t.Fatalf("targets = %+v, %v", got, err)
+	}
+	if got, err := deployments.HasActiveByProvider(ctx, provider.ID); err != nil || !got {
+		t.Fatalf("active deployment by provider = %v, %v", got, err)
+	}
+	if got, err := deployments.HasActiveByCredential(ctx, credential.ID); err != nil || !got {
+		t.Fatalf("active deployment by credential = %v, %v", got, err)
+	}
+	if got, err := targets.HasActiveByDeployment(ctx, deployment.ID); err != nil || !got {
+		t.Fatalf("active target by deployment = %v, %v", got, err)
 	}
 	duplicate, _ := catalogmodel.NewModelAlias(project.ID, "assistant")
 	if err := aliases.Save(ctx, duplicate); !errors.Is(err, sharederrors.ErrConflict) {

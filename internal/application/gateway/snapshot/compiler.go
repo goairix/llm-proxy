@@ -214,9 +214,6 @@ func (c *Compiler) Compile(source SourceConfig, now time.Time) (*RuntimeSnapshot
 			if target.Status != sharedmodel.StatusActive {
 				continue
 			}
-			if _, deploymentActive := activeDeployments[target.DeploymentID]; !deploymentActive {
-				continue
-			}
 			if selected != nil {
 				return nil, compileMessage(source.Revision, "model alias", alias.ID, "没有唯一启用的 RouteTarget")
 			}
@@ -226,6 +223,10 @@ func (c *Compiler) Compile(source SourceConfig, now time.Time) (*RuntimeSnapshot
 		if selected == nil {
 			return nil, compileMessage(source.Revision, "model alias", alias.ID, "没有唯一启用的 RouteTarget")
 		}
+		deployment, deploymentActive := activeDeployments[selected.DeploymentID]
+		if !deploymentActive {
+			return nil, compileMessage(source.Revision, "route target", selected.ID, "引用的 Deployment 未启用")
+		}
 		sourceDeployment := allDeployments[selected.DeploymentID]
 		if !deploymentVisibleToProject(sourceDeployment.Scope, project.ID, project.OrganizationID) {
 			return nil, compileMessage(source.Revision, "route target", selected.ID, "Deployment 对 Project 不可见")
@@ -234,10 +235,10 @@ func (c *Compiler) Compile(source SourceConfig, now time.Time) (*RuntimeSnapshot
 		if _, duplicate := routes[key]; duplicate {
 			return nil, compileMessage(source.Revision, "model alias", alias.ID, "Project 内模型名称重复")
 		}
-		routes[key] = RoutePlan{AliasID: alias.ID, Alias: alias.Name, Deployment: activeDeployments[selected.DeploymentID]}
+		routes[key] = RoutePlan{AliasID: alias.ID, Alias: alias.Name, Deployment: deployment}
 	}
 
-	return &RuntimeSnapshot{revision: source.Revision, builtAt: now, virtualKeys: virtualKeys, routes: routes}, nil
+	return &RuntimeSnapshot{revision: source.Revision, builtAt: now, virtualKeys: virtualKeys, routes: routes, compiled: true}, nil
 }
 
 func validateScopeReferences(scope catalogmodel.Scope, organizations map[uuid.UUID]tenancymodel.Organization, projects map[uuid.UUID]tenancymodel.Project) error {

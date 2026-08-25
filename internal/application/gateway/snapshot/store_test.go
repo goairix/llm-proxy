@@ -44,6 +44,15 @@ func TestStoreRejectsNilSnapshot(t *testing.T) {
 	NewStore().Publish(nil)
 }
 
+func TestStoreRejectsSnapshotNotCreatedByCompiler(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("Publish(uncompiled) did not panic")
+		}
+	}()
+	NewStore().Publish(&RuntimeSnapshot{})
+}
+
 func TestSessionKeepsSnapshotUsedAtBegin(t *testing.T) {
 	store := NewStore()
 	store.Publish(newSnapshotForTest(1))
@@ -63,5 +72,6 @@ func newSnapshotForTest(revision int64) *RuntimeSnapshot {
 		revision:    revision,
 		virtualKeys: make(map[[32]byte]AccessContext),
 		routes:      make(map[RouteKey]RoutePlan),
+		compiled:    true,
 	}
 }

@@ -30,7 +30,7 @@ func main() {
 	defer app.Logger.Sync() //nolint:errcheck
 	processContext, stopProcess := context.WithCancel(context.Background())
 	defer stopProcess()
-	app.ControlPlane.Start(processContext)
+	app.Gateway.Start(processContext)
 
 	// Start serving in a background goroutine.
 	go func() {
@@ -48,7 +48,7 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	shutdownApplication(ctx, app.Logger, app.Server, app.ControlPlane, app.Telemetry)
+	shutdownApplication(ctx, app.Logger, app.Server, app.Gateway, app.Telemetry)
 }
 
 type shutdownServer interface {
@@ -56,22 +56,24 @@ type shutdownServer interface {
 	Shutdown(context.Context) error
 }
 
-type shutdownControlPlane interface {
-	Stop()
-	Close() error
+type shutdownGateway interface {
+	Stop(context.Context) error
+	CloseDatabase() error
 }
 
 type shutdownTelemetry interface {
 	Shutdown(context.Context) error
 }
 
-func shutdownApplication(ctx context.Context, logger *zap.Logger, server shutdownServer, controlPlane shutdownControlPlane, telemetry shutdownTelemetry) {
+func shutdownApplication(ctx context.Context, logger *zap.Logger, server shutdownServer, gateway shutdownGateway, telemetry shutdownTelemetry) {
 	server.MarkNotReady()
-	controlPlane.Stop()
+	if err := gateway.Stop(ctx); err != nil {
+		logger.Error("gateway runtime shutdown error", zap.Error(err))
+	}
 	if err := server.Shutdown(ctx); err != nil {
 		logger.Error("shutdown error", zap.Error(err))
 	}
-	if err := controlPlane.Close(); err != nil {
+	if err := gateway.CloseDatabase(); err != nil {
 		logger.Error("database shutdown error", zap.Error(err))
 	}
 	if err := telemetry.Shutdown(ctx); err != nil {

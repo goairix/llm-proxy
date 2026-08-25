@@ -12,6 +12,7 @@ import (
 
 	gatewaysnapshot "github.com/goairix/llm-proxy/internal/application/gateway/snapshot"
 	catalogmodel "github.com/goairix/llm-proxy/internal/domain/catalog/model"
+	sharedmodel "github.com/goairix/llm-proxy/internal/domain/shared/model"
 	tenancymodel "github.com/goairix/llm-proxy/internal/domain/tenancy/model"
 )
 
@@ -213,6 +214,7 @@ func sourceForRevision(t *testing.T, revision int64) gatewaysnapshot.SourceConfi
 		catalogmodel.CapabilitySet{Text: true, Streaming: true},
 	)
 	alias, _ := catalogmodel.NewModelAlias(project.ID, "assistant")
+	alias.Status = sharedmodel.StatusActive
 	target, _ := catalogmodel.NewRouteTarget(alias.ID, deployment.ID, 0, 100)
 	return gatewaysnapshot.SourceConfig{
 		Revision: revision, Organizations: []tenancymodel.Organization{*organization}, Projects: []tenancymodel.Project{*project},

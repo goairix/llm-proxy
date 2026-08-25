@@ -70,18 +70,21 @@ func TestControlPlaneIntegrationWithPostgresStoresOnlyProtectedSecrets(t *testin
 		ControlPlane:         config.ControlPlaneConfig{Token: "integration-management-token-with-entropy"},
 		CredentialEncryption: config.CredentialEncryptionConfig{CurrentKeyVersion: "v1", Keys: map[string]string{"v1": keyring}},
 	}
-	runtime, err := provider.NewControlPlaneRuntime(cfg, zap.NewNop())
+	gateway := provider.NewGatewayRuntime(cfg, zap.NewNop())
+	runtime, err := provider.NewControlPlaneRuntime(cfg, gateway)
 	if err != nil {
 		t.Fatal(err)
 	}
 	runContext, cancel := context.WithCancel(context.Background())
-	runtime.Start(runContext)
+	gateway.Start(runContext)
 	t.Cleanup(func() {
 		cancel()
-		runtime.Stop()
-		_ = runtime.Close()
+		stopContext, stopCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer stopCancel()
+		_ = gateway.Stop(stopContext)
+		_ = gateway.CloseDatabase()
 	})
-	waitForDatabase(t, runtime)
+	waitForDatabase(t, gateway)
 	handler := middleware.RequestID(middleware.ControlPlaneAuth(runtime.Authorizer)(runtime.Handler))
 
 	organization := postResource(t, handler, "/v1/organizations", `{"name":"Acme"}`)
@@ -94,9 +97,63 @@ func TestControlPlaneIntegrationWithPostgresStoresOnlyProtectedSecrets(t *testin
 	deployment := postResource(t, handler, "/v1/deployments", deploymentBody)
 	aliasBody := fmt.Sprintf(`{"project_id":%q,"name":"assistant"}`, project.ID)
 	modelAlias := postResource(t, handler, "/v1/model-aliases", aliasBody)
+	waitForGatewaySnapshot(t, gateway, modelAlias.Revision)
 	targetBody := fmt.Sprintf(`{"deployment_id":%q,"priority":0,"weight":100}`, deployment.ID)
 	target := postResource(t, handler, "/v1/model-aliases/"+modelAlias.ID.String()+"/route-targets", targetBody)
+	waitForGatewaySnapshot(t, gateway, target.Revision)
+	preparedInitialSession, err := gateway.Store().Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := preparedInitialSession.Resolve(project.ID, "assistant"); err == nil {
+		t.Fatal("new model alias became resolvable before explicit activation")
+	}
+	activatedAlias := patchResource(t, handler, "/v1/model-aliases/"+modelAlias.ID.String(), `{"status":"active"}`)
+	waitForGatewaySnapshot(t, gateway, activatedAlias.Revision)
+	session, err := gateway.Store().Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	access, err := session.Authenticate(virtualKey.Secret, time.Now().UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := session.Resolve(access.ProjectID, "assistant")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if access.ProjectID != project.ID || plan.Deployment.ID != deployment.ID || plan.Deployment.ConnectorType != "fake" {
+		t.Fatalf("shared gateway snapshot access=%+v plan=%+v", access, plan)
+	}
+	disabledAlias := patchResource(t, handler, "/v1/model-aliases/"+modelAlias.ID.String(), `{"status":"disabled"}`)
+	waitForGatewaySnapshot(t, gateway, disabledAlias.Revision)
+	revocationSession, err := gateway.Store().Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := revocationSession.Resolve(project.ID, "assistant"); err == nil {
+		t.Fatal("disabled model alias remained resolvable in the published snapshot")
+	}
 	disabledTarget := patchResource(t, handler, "/v1/route-targets/"+target.ID.String(), `{"status":"disabled"}`)
+	waitForGatewaySnapshot(t, gateway, disabledTarget.Revision)
+	preparedTarget := patchResource(t, handler, "/v1/route-targets/"+target.ID.String(), `{"status":"active"}`)
+	waitForGatewaySnapshot(t, gateway, preparedTarget.Revision)
+	preparedSession, err := gateway.Store().Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := preparedSession.Resolve(project.ID, "assistant"); err == nil {
+		t.Fatal("target prepared under disabled alias became prematurely resolvable")
+	}
+	reactivatedAlias := patchResource(t, handler, "/v1/model-aliases/"+modelAlias.ID.String(), `{"status":"active"}`)
+	waitForGatewaySnapshot(t, gateway, reactivatedAlias.Revision)
+	reactivatedSession, err := gateway.Store().Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := reactivatedSession.Resolve(project.ID, "assistant"); err != nil {
+		t.Fatalf("reactivated alias did not restore route: %v", err)
+	}
 
 	if organization.ID.Version() != 7 || project.ID.Version() != 7 || virtualKey.ID.Version() != 7 || credential.ID.Version() != 7 || deployment.ID.Version() != 7 || modelAlias.ID.Version() != 7 || target.ID.Version() != 7 {
 		t.Fatalf("one or more control-plane IDs are not UUIDv7")
@@ -104,8 +161,11 @@ func TestControlPlaneIntegrationWithPostgresStoresOnlyProtectedSecrets(t *testin
 	if virtualKey.Secret == "" {
 		t.Fatal("virtual key create response did not contain the one-time secret")
 	}
-	if target.Revision != 8 || disabledTarget.Revision != 9 || !strings.Contains(disabledTarget.Body, `"status":"disabled"`) {
-		t.Fatalf("target revisions/status: create=%d update=%d body=%s", target.Revision, disabledTarget.Revision, disabledTarget.Body)
+	if modelAlias.Revision != 7 || target.Revision != 8 || activatedAlias.Revision != 9 || disabledAlias.Revision != 10 || disabledTarget.Revision != 11 || preparedTarget.Revision != 12 || reactivatedAlias.Revision != 13 || !strings.Contains(modelAlias.Body, `"status":"disabled"`) || !strings.Contains(disabledTarget.Body, `"status":"disabled"`) {
+		t.Fatalf(
+			"route lifecycle: alias_create=%d target_create=%d alias_activate=%d alias_disable=%d target_disable=%d target_prepare=%d alias_reactivate=%d alias_body=%s target_body=%s",
+			modelAlias.Revision, target.Revision, activatedAlias.Revision, disabledAlias.Revision, disabledTarget.Revision, preparedTarget.Revision, reactivatedAlias.Revision, modelAlias.Body, disabledTarget.Body,
+		)
 	}
 	for _, path := range []string{
 		"/v1/organizations/" + organization.ID.String(),
@@ -118,7 +178,7 @@ func TestControlPlaneIntegrationWithPostgresStoresOnlyProtectedSecrets(t *testin
 		_ = getResource(t, handler, path)
 	}
 
-	db, err := runtime.Database.DB(context.Background())
+	db, err := gateway.Database.DB(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -220,7 +280,7 @@ func getResource(t *testing.T, handler http.Handler, path string) string {
 	return recorder.Body.String()
 }
 
-func waitForDatabase(t *testing.T, runtime *provider.ControlPlaneRuntime) {
+func waitForDatabase(t *testing.T, runtime *provider.GatewayRuntime) {
 	t.Helper()
 	deadline := time.NewTimer(5 * time.Second)
 	ticker := time.NewTicker(10 * time.Millisecond)
@@ -233,6 +293,25 @@ func waitForDatabase(t *testing.T, runtime *provider.ControlPlaneRuntime) {
 		select {
 		case <-deadline.C:
 			t.Fatal("database runtime did not become available")
+		case <-ticker.C:
+		}
+	}
+}
+
+func waitForGatewaySnapshot(t *testing.T, runtime *provider.GatewayRuntime, revision int64) {
+	t.Helper()
+	deadline := time.NewTimer(5 * time.Second)
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer deadline.Stop()
+	defer ticker.Stop()
+	for {
+		if current, ok := runtime.Store().Current(); ok && current.Revision() == revision {
+			return
+		}
+		select {
+		case <-deadline.C:
+			current, _ := runtime.Store().Current()
+			t.Fatalf("gateway snapshot = %v, want revision %d", current, revision)
 		case <-ticker.C:
 		}
 	}

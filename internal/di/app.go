@@ -9,8 +9,8 @@ import (
 
 // App contains the process lifecycle dependencies assembled by Wire.
 type App struct {
-	Server       *httpserver.Server
-	Telemetry    *observability.Runtime
-	Logger       *zap.Logger
-	ControlPlane *provider.ControlPlaneRuntime
+	Server    *httpserver.Server
+	Telemetry *observability.Runtime
+	Logger    *zap.Logger
+	Gateway   *provider.GatewayRuntime
 }

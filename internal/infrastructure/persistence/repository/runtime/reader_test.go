@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -54,7 +55,7 @@ func TestMapRecordsPreservesDisabledResourcesAndSealedCredential(t *testing.T) {
 }
 
 func TestReaderLoadsCompleteConfigFromPostgres(t *testing.T) {
-	db := openRuntimeReaderTestDB(t)
+	db, _ := openRuntimeReaderTestDB(t)
 	records := completeRecords(t)
 	for _, value := range []any{
 		&records.organizations, &records.projects, &records.virtualKeys, &records.providers,
@@ -83,6 +84,78 @@ func TestReaderLoadsCompleteConfigFromPostgres(t *testing.T) {
 	}
 	if got.RouteTargets[0].DeploymentID != got.Deployments[0].ID || got.Deployments[0].CredentialID == nil || *got.Deployments[0].CredentialID != got.Credentials[0].ID {
 		t.Fatalf("associations changed: %+v", got)
+	}
+}
+
+func TestReaderLoadKeepsOneRepeatableReadViewDuringConcurrentCommit(t *testing.T) {
+	readerDB, schemaDSN := openRuntimeReaderTestDB(t)
+	writerDB := openRuntimeReaderDatabase(t, schemaDSN)
+	t.Cleanup(func() {
+		if sqlDB, err := writerDB.DB(); err == nil {
+			_ = sqlDB.Close()
+		}
+	})
+	now := time.Now().UTC()
+	first := entity.Organization{
+		BaseEntity: entity.BaseEntity{ID: uuid.Must(uuid.NewV7()), CreatedAt: now, UpdatedAt: now},
+		Name:       "First", Status: string(sharedmodel.StatusActive),
+	}
+	if err := readerDB.Create(&first).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := readerDB.Model(&entity.ConfigRevision{}).Where("revision = ?", 0).Updates(map[string]any{"revision": 1, "updated_at": now}).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	revisionRead := make(chan struct{})
+	writerDone := make(chan struct{})
+	var intercepted atomic.Bool
+	var writerErr error
+	callbackName := "runtime_reader_repeatable_read_test"
+	if err := readerDB.Callback().Query().After("gorm:query").Register(callbackName, func(tx *gorm.DB) {
+		if tx.Statement.Table == "config_revisions" && intercepted.CompareAndSwap(false, true) {
+			close(revisionRead)
+			<-writerDone
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = readerDB.Callback().Query().Remove(callbackName) })
+	go func() {
+		defer close(writerDone)
+		select {
+		case <-revisionRead:
+		case <-time.After(5 * time.Second):
+			writerErr = errors.New("reader did not expose the revision query callback")
+			return
+		}
+		second := entity.Organization{
+			BaseEntity: entity.BaseEntity{ID: uuid.Must(uuid.NewV7()), CreatedAt: now, UpdatedAt: now},
+			Name:       "Second", Status: string(sharedmodel.StatusActive),
+		}
+		writerErr = writerDB.Transaction(func(tx *gorm.DB) error {
+			if err := tx.Create(&second).Error; err != nil {
+				return err
+			}
+			return tx.Model(&entity.ConfigRevision{}).Where("revision = ?", 1).Updates(map[string]any{"revision": 2, "updated_at": now}).Error
+		})
+	}()
+
+	reader := NewReader(transactions.NewManager(postgresTestProvider{db: readerDB}))
+	got, err := reader.Load(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-writerDone
+	if writerErr != nil {
+		t.Fatal(writerErr)
+	}
+	if got.Revision != 1 || len(got.Organizations) != 1 || got.Organizations[0].ID != first.ID {
+		t.Fatalf("mixed runtime view: revision=%d organizations=%+v", got.Revision, got.Organizations)
+	}
+	current, err := reader.CurrentRevision(context.Background())
+	if err != nil || current != 2 {
+		t.Fatalf("CurrentRevision() = %d, %v; want committed revision 2", current, err)
 	}
 }
 
@@ -145,7 +218,7 @@ type postgresTestProvider struct{ db *gorm.DB }
 
 func (p postgresTestProvider) DB(context.Context) (*gorm.DB, error) { return p.db, nil }
 
-func openRuntimeReaderTestDB(t *testing.T) *gorm.DB {
+func openRuntimeReaderTestDB(t *testing.T) (*gorm.DB, string) {
 	t.Helper()
 	dsn := os.Getenv("LLM_PROXY_TEST_POSTGRES_DSN")
 	if dsn == "" {
@@ -176,7 +249,7 @@ func openRuntimeReaderTestDB(t *testing.T) *gorm.DB {
 			_ = sqlDB.Close()
 		}
 	})
-	return db
+	return db, parsed.String()
 }
 
 func openRuntimeReaderDatabase(t *testing.T, dsn string) *gorm.DB {

@@ -10,22 +10,26 @@ import (
 	"testing"
 	"time"
 
+	gatewaysnapshot "github.com/goairix/llm-proxy/internal/application/gateway/snapshot"
 	appRuntime "github.com/goairix/llm-proxy/internal/application/runtime"
 	"github.com/goairix/llm-proxy/internal/infrastructure/config"
 	"github.com/goairix/llm-proxy/internal/infrastructure/observability"
 	"github.com/goairix/llm-proxy/internal/infrastructure/persistence/database"
 	"github.com/goairix/llm-proxy/internal/infrastructure/proxy/tokenusage"
+	snapshotruntime "github.com/goairix/llm-proxy/internal/infrastructure/snapshot"
 	"github.com/goairix/llm-proxy/internal/interfaces/http/handler/dashboard"
 	"go.uber.org/zap"
 	"gorm.io/gorm"
 )
 
 func TestControlPlaneRuntimeDisabledDoesNotCreateDatabase(t *testing.T) {
-	runtime, err := NewControlPlaneRuntime(&config.Config{}, zap.NewNop())
+	cfg := &config.Config{}
+	gateway := NewGatewayRuntime(cfg, zap.NewNop())
+	runtime, err := NewControlPlaneRuntime(cfg, gateway)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if runtime.Handler != nil || runtime.Database != nil || runtime.Authorizer != nil {
+	if runtime.Handler != nil || gateway.Database != nil || runtime.Authorizer != nil {
 		t.Fatalf("disabled runtime = %+v", runtime)
 	}
 }
@@ -49,11 +53,12 @@ func TestOfflineControlPlaneDoesNotBreakTransparentProxy(t *testing.T) {
 		},
 	}
 	logger := zap.NewNop()
-	controlPlane, err := NewControlPlaneRuntime(cfg, logger)
+	gateway := NewGatewayRuntime(cfg, logger)
+	controlPlane, err := NewControlPlaneRuntime(cfg, gateway)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if controlPlane.Handler == nil || controlPlane.Database == nil || controlPlane.Authorizer == nil {
+	if controlPlane.Handler == nil || gateway.Database == nil || controlPlane.Authorizer == nil {
 		t.Fatalf("enabled runtime = %+v", controlPlane)
 	}
 
@@ -100,11 +105,17 @@ func TestControlPlaneStopCancelsAndJoinsConnectionLoop(t *testing.T) {
 		close(stopped)
 		return nil, ctx.Err()
 	}, time.Second, zap.NewNop())
-	runtime := &ControlPlaneRuntime{Database: databaseRuntime}
+	store := gatewaysnapshot.NewStore()
+	runtime := &GatewayRuntime{
+		runtime:  snapshotruntime.NewRuntime(databaseRuntime, nil, store),
+		Database: databaseRuntime,
+	}
 
 	runtime.Start(context.Background())
 	<-started
-	runtime.Stop()
+	if err := runtime.Stop(context.Background()); err != nil {
+		t.Fatal(err)
+	}
 
 	select {
 	case <-stopped:

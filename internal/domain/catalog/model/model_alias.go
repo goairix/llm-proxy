@@ -18,7 +18,7 @@ type ModelAlias struct {
 	Status    sharedmodel.Status
 }
 
-// NewModelAlias creates an active model alias within a project.
+// NewModelAlias creates a disabled model alias that can be activated after its route is prepared.
 func NewModelAlias(projectID uuid.UUID, name string) (*ModelAlias, error) {
 	entity, err := sharedmodel.NewEntity()
 	if err != nil {
@@ -28,7 +28,7 @@ func NewModelAlias(projectID uuid.UUID, name string) (*ModelAlias, error) {
 		Entity:    entity,
 		ProjectID: projectID,
 		Name:      strings.TrimSpace(name),
-		Status:    sharedmodel.StatusActive,
+		Status:    sharedmodel.StatusDisabled,
 	}
 	if err := alias.Validate(); err != nil {
 		return nil, err

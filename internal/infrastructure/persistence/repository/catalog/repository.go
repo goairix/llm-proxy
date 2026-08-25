@@ -12,6 +12,7 @@ import (
 	catalogmodel "github.com/goairix/llm-proxy/internal/domain/catalog/model"
 	catalogrepository "github.com/goairix/llm-proxy/internal/domain/catalog/repository"
 	sharederrors "github.com/goairix/llm-proxy/internal/domain/shared/errors"
+	sharedmodel "github.com/goairix/llm-proxy/internal/domain/shared/model"
 	"github.com/goairix/llm-proxy/internal/infrastructure/persistence/database"
 	"github.com/goairix/llm-proxy/internal/infrastructure/persistence/entity"
 	"github.com/goairix/llm-proxy/internal/infrastructure/persistence/transactions"
@@ -145,6 +146,14 @@ func (r *DeploymentRepository) ListByProvider(ctx context.Context, providerID uu
 	return r.listDeployments(ctx, func(db *gorm.DB) *gorm.DB { return db.Where("provider_id = ?", providerID) }, limit, offset)
 }
 
+func (r *DeploymentRepository) HasActiveByProvider(ctx context.Context, providerID uuid.UUID) (bool, error) {
+	return (repositoryBase{r.manager}).exists(ctx, &entity.Deployment{}, "provider_id = ? AND status = ?", providerID, sharedmodel.StatusActive)
+}
+
+func (r *DeploymentRepository) HasActiveByCredential(ctx context.Context, credentialID uuid.UUID) (bool, error) {
+	return (repositoryBase{r.manager}).exists(ctx, &entity.Deployment{}, "credential_id = ? AND status = ?", credentialID, sharedmodel.StatusActive)
+}
+
 func (r *DeploymentRepository) listDeployments(ctx context.Context, filter queryFilter, limit, offset int) ([]catalogmodel.Deployment, error) {
 	var records []entity.Deployment
 	if err := r.list(ctx, &records, filter, limit, offset); err != nil {
@@ -264,10 +273,24 @@ func (r *RouteTargetRepository) ListByModelAlias(ctx context.Context, modelAlias
 	return result, nil
 }
 
+func (r *RouteTargetRepository) HasActiveByDeployment(ctx context.Context, deploymentID uuid.UUID) (bool, error) {
+	return (repositoryBase{r.manager}).exists(ctx, &entity.RouteTarget{}, "deployment_id = ? AND status = ?", deploymentID, sharedmodel.StatusActive)
+}
+
 type ConfigRevisionRepository struct{ manager transactions.DBManager }
 
 func NewConfigRevisionRepository(manager transactions.DBManager) *ConfigRevisionRepository {
 	return &ConfigRevisionRepository{manager: manager}
+}
+
+// Lock serializes all configuration mutations before they validate code-managed associations.
+func (r *ConfigRevisionRepository) Lock(ctx context.Context) error {
+	db, err := r.manager.DB(ctx)
+	if err != nil {
+		return mapPersistenceError(err)
+	}
+	var record entity.ConfigRevision
+	return mapPersistenceError(db.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).Order("revision DESC").First(&record).Error)
 }
 
 func (r *ConfigRevisionRepository) Current(ctx context.Context) (int64, error) {
@@ -316,6 +339,19 @@ func (r repositoryBase) find(ctx context.Context, record any, query string, args
 	}
 	conditions := append([]any{query}, args...)
 	err = db.WithContext(ctx).First(record, conditions...).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return false, nil
+	}
+	return err == nil, mapPersistenceError(err)
+}
+
+func (r repositoryBase) exists(ctx context.Context, record any, query string, args ...any) (bool, error) {
+	db, err := r.manager.DB(ctx)
+	if err != nil {
+		return false, mapPersistenceError(err)
+	}
+	conditions := append([]any{query}, args...)
+	err = db.WithContext(ctx).Select("id").Take(record, conditions...).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return false, nil
 	}

@@ -7,6 +7,7 @@ import (
 	"github.com/google/uuid"
 
 	sharederrors "github.com/goairix/llm-proxy/internal/domain/shared/errors"
+	sharedmodel "github.com/goairix/llm-proxy/internal/domain/shared/model"
 )
 
 func TestScopeValidation(t *testing.T) {
@@ -86,6 +87,16 @@ func TestCatalogConstructorsUseUUIDv7(t *testing.T) {
 		if id.Version() != 7 {
 			t.Fatalf("%s UUID version = %d; want 7", name, id.Version())
 		}
+	}
+}
+
+func TestNewModelAliasStartsDisabledUntilRouteIsPrepared(t *testing.T) {
+	alias, err := NewModelAlias(uuid.Must(uuid.NewV7()), "assistant")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if alias.Status != sharedmodel.StatusDisabled {
+		t.Fatalf("new model alias status = %s; want disabled", alias.Status)
 	}
 }
 

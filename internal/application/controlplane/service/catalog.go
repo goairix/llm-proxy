@@ -10,6 +10,7 @@ import (
 	"github.com/goairix/llm-proxy/internal/application/controlplane/dto"
 	controlerrors "github.com/goairix/llm-proxy/internal/application/controlplane/errors"
 	controlport "github.com/goairix/llm-proxy/internal/application/controlplane/port"
+	gatewayport "github.com/goairix/llm-proxy/internal/application/gateway/port"
 	catalogmodel "github.com/goairix/llm-proxy/internal/domain/catalog/model"
 	catalogrepository "github.com/goairix/llm-proxy/internal/domain/catalog/repository"
 	sharedmodel "github.com/goairix/llm-proxy/internal/domain/shared/model"
@@ -29,6 +30,7 @@ type CatalogService struct {
 	revisions        catalogrepository.ConfigRevisionRepository
 	transactions     sharedport.TransactionManager
 	credentialCipher controlport.CredentialCipher
+	notifier         gatewayport.RefreshNotifier
 }
 
 func NewCatalogService(
@@ -42,8 +44,13 @@ func NewCatalogService(
 	revisions catalogrepository.ConfigRevisionRepository,
 	transactions sharedport.TransactionManager,
 	credentialCipher controlport.CredentialCipher,
+	notifier gatewayport.RefreshNotifier,
 ) *CatalogService {
-	return &CatalogService{providers: providers, credentials: credentials, deployments: deployments, aliases: aliases, targets: targets, organizations: organizations, projects: projects, revisions: revisions, transactions: transactions, credentialCipher: credentialCipher}
+	return &CatalogService{
+		providers: providers, credentials: credentials, deployments: deployments, aliases: aliases, targets: targets,
+		organizations: organizations, projects: projects, revisions: revisions, transactions: transactions,
+		credentialCipher: credentialCipher, notifier: notifier,
+	}
 }
 
 func (s *CatalogService) CreateProvider(ctx context.Context, command dto.CreateProvider) (dto.ProviderResult, error) {
@@ -52,7 +59,7 @@ func (s *CatalogService) CreateProvider(ctx context.Context, command dto.CreateP
 		return dto.ProviderResult{}, mapApplicationError(err)
 	}
 	var revision int64
-	err = s.transactions.Transaction(ctx, func(txCtx context.Context) error {
+	err = s.mutate(ctx, func(txCtx context.Context) error {
 		if err := s.providers.Save(txCtx, provider); err != nil {
 			return err
 		}
@@ -72,7 +79,7 @@ func (s *CatalogService) CreateProviderCredential(ctx context.Context, command d
 	}
 	var credential *catalogmodel.ProviderCredential
 	var revision int64
-	err := s.transactions.Transaction(ctx, func(txCtx context.Context) error {
+	err := s.mutate(ctx, func(txCtx context.Context) error {
 		provider, err := s.providers.FindByID(txCtx, command.ProviderID)
 		if err != nil {
 			return err
@@ -118,7 +125,7 @@ func credentialResult(credential *catalogmodel.ProviderCredential, revision int6
 func (s *CatalogService) CreateDeployment(ctx context.Context, command dto.CreateDeployment) (dto.DeploymentResult, error) {
 	var deployment *catalogmodel.Deployment
 	var revision int64
-	err := s.transactions.Transaction(ctx, func(txCtx context.Context) error {
+	err := s.mutate(ctx, func(txCtx context.Context) error {
 		provider, err := s.providers.FindByID(txCtx, command.ProviderID)
 		if err != nil {
 			return err
@@ -176,7 +183,7 @@ func (s *CatalogService) CreateDeployment(ctx context.Context, command dto.Creat
 func (s *CatalogService) CreateModelAlias(ctx context.Context, command dto.CreateModelAlias) (dto.ModelAliasResult, error) {
 	var alias *catalogmodel.ModelAlias
 	var revision int64
-	err := s.transactions.Transaction(ctx, func(txCtx context.Context) error {
+	err := s.mutate(ctx, func(txCtx context.Context) error {
 		project, err := s.activeProject(txCtx, command.ProjectID)
 		if err != nil {
 			return err
@@ -210,16 +217,13 @@ func (s *CatalogService) CreateModelAlias(ctx context.Context, command dto.Creat
 func (s *CatalogService) CreateRouteTarget(ctx context.Context, command dto.CreateRouteTarget) (dto.RouteTargetResult, error) {
 	var target *catalogmodel.RouteTarget
 	var revision int64
-	err := s.transactions.Transaction(ctx, func(txCtx context.Context) error {
+	err := s.mutate(ctx, func(txCtx context.Context) error {
 		alias, err := s.aliases.FindByID(txCtx, command.ModelAliasID)
 		if err != nil {
 			return err
 		}
 		if alias == nil {
 			return notFound("模型别名")
-		}
-		if alias.Status != sharedmodel.StatusActive {
-			return disabled("模型别名")
 		}
 		project, err := s.activeProject(txCtx, alias.ProjectID)
 		if err != nil {
@@ -267,6 +271,21 @@ func (s *CatalogService) CreateRouteTarget(ctx context.Context, command dto.Crea
 		return dto.RouteTargetResult{}, mapApplicationError(err)
 	}
 	return dto.RouteTargetResult{RouteTarget: *target, Revision: revision}, nil
+}
+
+func (s *CatalogService) mutate(ctx context.Context, fn func(context.Context) error) error {
+	if err := s.transactions.Transaction(ctx, func(txCtx context.Context) error {
+		if err := s.revisions.Lock(txCtx); err != nil {
+			return err
+		}
+		return fn(txCtx)
+	}); err != nil {
+		return err
+	}
+	if s.notifier != nil {
+		s.notifier.NotifyRefresh()
+	}
+	return nil
 }
 
 type resolvedScope struct {
@@ -417,7 +436,7 @@ func (s *CatalogService) ListProviders(ctx context.Context, pagination dto.Pagin
 func (s *CatalogService) UpdateProvider(ctx context.Context, command dto.UpdateProvider) (dto.ProviderResult, error) {
 	var provider *catalogmodel.Provider
 	var revision int64
-	err := s.transactions.Transaction(ctx, func(txCtx context.Context) error {
+	err := s.mutate(ctx, func(txCtx context.Context) error {
 		var err error
 		provider, err = s.providers.FindByID(txCtx, command.ID)
 		if err != nil {
@@ -425,6 +444,15 @@ func (s *CatalogService) UpdateProvider(ctx context.Context, command dto.UpdateP
 		}
 		if provider == nil {
 			return notFound("供应商")
+		}
+		if disabling(provider.Status, command.Status) {
+			referenced, err := s.deployments.HasActiveByProvider(txCtx, provider.ID)
+			if err != nil {
+				return err
+			}
+			if referenced {
+				return controlerrors.New(controlerrors.Conflict, "供应商仍被启用的 Deployment 引用", "status", nil)
+			}
 		}
 		if command.Name != nil {
 			provider.Name = *command.Name
@@ -474,7 +502,7 @@ func (s *CatalogService) ListProviderCredentials(ctx context.Context, pagination
 func (s *CatalogService) UpdateProviderCredential(ctx context.Context, command dto.UpdateProviderCredential) (dto.ProviderCredentialResult, error) {
 	var credential *catalogmodel.ProviderCredential
 	var revision int64
-	err := s.transactions.Transaction(ctx, func(txCtx context.Context) error {
+	err := s.mutate(ctx, func(txCtx context.Context) error {
 		var err error
 		credential, err = s.credentials.FindByID(txCtx, command.ID)
 		if err != nil {
@@ -489,6 +517,15 @@ func (s *CatalogService) UpdateProviderCredential(ctx context.Context, command d
 		}
 		if provider == nil {
 			return notFound("供应商")
+		}
+		if disabling(credential.Status, command.Status) {
+			referenced, err := s.deployments.HasActiveByCredential(txCtx, credential.ID)
+			if err != nil {
+				return err
+			}
+			if referenced {
+				return controlerrors.New(controlerrors.Conflict, "供应商凭据仍被启用的 Deployment 引用", "status", nil)
+			}
 		}
 		if len(command.Credential) > 0 {
 			sealed, err := s.credentialCipher.Seal(txCtx, credential.ID, credential.ProviderID, credential.Scope, command.Credential)
@@ -535,7 +572,7 @@ func (s *CatalogService) ListDeployments(ctx context.Context, pagination dto.Pag
 func (s *CatalogService) UpdateDeployment(ctx context.Context, command dto.UpdateDeployment) (dto.DeploymentResult, error) {
 	var deployment *catalogmodel.Deployment
 	var revision int64
-	err := s.transactions.Transaction(ctx, func(txCtx context.Context) error {
+	err := s.mutate(ctx, func(txCtx context.Context) error {
 		var err error
 		deployment, err = s.deployments.FindByID(txCtx, command.ID)
 		if err != nil {
@@ -543,6 +580,15 @@ func (s *CatalogService) UpdateDeployment(ctx context.Context, command dto.Updat
 		}
 		if deployment == nil {
 			return notFound("Deployment")
+		}
+		if disabling(deployment.Status, command.Status) {
+			referenced, err := s.targets.HasActiveByDeployment(txCtx, deployment.ID)
+			if err != nil {
+				return err
+			}
+			if referenced {
+				return controlerrors.New(controlerrors.Conflict, "Deployment 仍被启用的 RouteTarget 引用", "status", nil)
+			}
 		}
 		if command.Name != nil {
 			deployment.Name = *command.Name
@@ -594,7 +640,7 @@ func (s *CatalogService) ListModelAliases(ctx context.Context, pagination dto.Pa
 func (s *CatalogService) UpdateModelAlias(ctx context.Context, command dto.UpdateModelAlias) (dto.ModelAliasResult, error) {
 	var alias *catalogmodel.ModelAlias
 	var revision int64
-	err := s.transactions.Transaction(ctx, func(txCtx context.Context) error {
+	err := s.mutate(ctx, func(txCtx context.Context) error {
 		var err error
 		alias, err = s.aliases.FindByID(txCtx, command.ID)
 		if err != nil {
@@ -621,6 +667,11 @@ func (s *CatalogService) UpdateModelAlias(ctx context.Context, command dto.Updat
 			alias.Name = *command.Name
 		}
 		if command.Status != nil {
+			if alias.Status != sharedmodel.StatusActive && *command.Status == sharedmodel.StatusActive {
+				if err := s.validateAliasActivation(txCtx, alias, project); err != nil {
+					return err
+				}
+			}
 			alias.Status = *command.Status
 		}
 		alias.UpdatedAt = time.Now().UTC()
@@ -661,7 +712,7 @@ func (s *CatalogService) ListRouteTargets(ctx context.Context, modelAliasID uuid
 func (s *CatalogService) UpdateRouteTarget(ctx context.Context, command dto.UpdateRouteTarget) (dto.RouteTargetResult, error) {
 	var target *catalogmodel.RouteTarget
 	var revision int64
-	err := s.transactions.Transaction(ctx, func(txCtx context.Context) error {
+	err := s.mutate(ctx, func(txCtx context.Context) error {
 		var err error
 		target, err = s.targets.FindByID(txCtx, command.ID)
 		if err != nil {
@@ -705,6 +756,9 @@ func (s *CatalogService) UpdateRouteTarget(ctx context.Context, command dto.Upda
 			target.Weight = *command.Weight
 		}
 		if command.Status != nil {
+			if disabling(target.Status, command.Status) && alias.Status == sharedmodel.StatusActive {
+				return controlerrors.New(controlerrors.Conflict, "请先停用模型别名，再停用其启用的 RouteTarget", "status", nil)
+			}
 			if *command.Status == sharedmodel.StatusActive && target.Status != sharedmodel.StatusActive {
 				existing, err := s.targets.ListByModelAlias(txCtx, target.ModelAliasID)
 				if err != nil {
@@ -719,9 +773,6 @@ func (s *CatalogService) UpdateRouteTarget(ctx context.Context, command dto.Upda
 			target.Status = *command.Status
 		}
 		if target.Status == sharedmodel.StatusActive {
-			if alias.Status != sharedmodel.StatusActive {
-				return disabled("模型别名")
-			}
 			if project.Status != sharedmodel.StatusActive {
 				return disabled("项目")
 			}
@@ -752,4 +803,45 @@ func (s *CatalogService) UpdateRouteTarget(ctx context.Context, command dto.Upda
 		return dto.RouteTargetResult{}, mapApplicationError(err)
 	}
 	return dto.RouteTargetResult{RouteTarget: *target, Revision: revision}, nil
+}
+
+func (s *CatalogService) validateAliasActivation(ctx context.Context, alias *catalogmodel.ModelAlias, project *tenantmodel.Project) error {
+	targets, err := s.targets.ListByModelAlias(ctx, alias.ID)
+	if err != nil {
+		return err
+	}
+	var selected *catalogmodel.RouteTarget
+	for index := range targets {
+		if targets[index].Status != sharedmodel.StatusActive {
+			continue
+		}
+		if selected != nil {
+			return controlerrors.New(controlerrors.Conflict, "模型别名必须且只能关联一个启用的 RouteTarget", "status", nil)
+		}
+		selected = &targets[index]
+	}
+	if selected == nil {
+		return controlerrors.New(controlerrors.Conflict, "模型别名必须且只能关联一个启用的 RouteTarget", "status", nil)
+	}
+	deployment, err := s.deployments.FindByID(ctx, selected.DeploymentID)
+	if err != nil {
+		return err
+	}
+	if deployment == nil {
+		return notFound("Deployment")
+	}
+	if deployment.Status != sharedmodel.StatusActive {
+		return disabled("Deployment")
+	}
+	if deployment.ConnectorType != "fake" {
+		return controlerrors.New(controlerrors.InvalidRequest, "当前版本 RouteTarget 只允许 Fake Deployment", "status", nil)
+	}
+	if !deploymentVisibleToProject(deployment.Scope, project.ID, project.OrganizationID) {
+		return controlerrors.New(controlerrors.PermissionDenied, "Deployment 对当前项目不可见", "status", nil)
+	}
+	return s.validateDeploymentAssociations(ctx, deployment)
+}
+
+func disabling(current sharedmodel.Status, next *sharedmodel.Status) bool {
+	return current == sharedmodel.StatusActive && next != nil && *next == sharedmodel.StatusDisabled
 }

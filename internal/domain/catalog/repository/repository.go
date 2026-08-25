@@ -29,6 +29,8 @@ type DeploymentRepository interface {
 	FindByID(context.Context, uuid.UUID) (*model.Deployment, error)
 	List(context.Context, int, int) ([]model.Deployment, error)
 	ListByProvider(context.Context, uuid.UUID, int, int) ([]model.Deployment, error)
+	HasActiveByProvider(context.Context, uuid.UUID) (bool, error)
+	HasActiveByCredential(context.Context, uuid.UUID) (bool, error)
 }
 
 // ModelAliasRepository persists project-visible model names.
@@ -45,10 +47,12 @@ type RouteTargetRepository interface {
 	Save(context.Context, *model.RouteTarget) error
 	FindByID(context.Context, uuid.UUID) (*model.RouteTarget, error)
 	ListByModelAlias(context.Context, uuid.UUID) ([]model.RouteTarget, error)
+	HasActiveByDeployment(context.Context, uuid.UUID) (bool, error)
 }
 
 // ConfigRevisionRepository increments and reads the global data-plane configuration version.
 type ConfigRevisionRepository interface {
+	Lock(context.Context) error
 	Current(context.Context) (int64, error)
 	Next(context.Context) (int64, error)
 }

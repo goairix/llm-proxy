@@ -48,6 +48,7 @@ type RuntimeSnapshot struct {
 	builtAt     time.Time
 	virtualKeys map[[32]byte]AccessContext
 	routes      map[RouteKey]RoutePlan
+	compiled    bool
 }
 
 func (s *RuntimeSnapshot) Revision() int64 {

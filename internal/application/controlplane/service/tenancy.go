@@ -8,6 +8,7 @@ import (
 
 	"github.com/goairix/llm-proxy/internal/application/controlplane/dto"
 	controlport "github.com/goairix/llm-proxy/internal/application/controlplane/port"
+	gatewayport "github.com/goairix/llm-proxy/internal/application/gateway/port"
 	catalogrepository "github.com/goairix/llm-proxy/internal/domain/catalog/repository"
 	sharedmodel "github.com/goairix/llm-proxy/internal/domain/shared/model"
 	sharedport "github.com/goairix/llm-proxy/internal/domain/shared/port"
@@ -22,6 +23,7 @@ type TenancyService struct {
 	revisions     catalogrepository.ConfigRevisionRepository
 	transactions  sharedport.TransactionManager
 	keyGenerator  controlport.VirtualKeyGenerator
+	notifier      gatewayport.RefreshNotifier
 }
 
 func NewTenancyService(
@@ -31,8 +33,12 @@ func NewTenancyService(
 	revisions catalogrepository.ConfigRevisionRepository,
 	transactions sharedport.TransactionManager,
 	keyGenerator controlport.VirtualKeyGenerator,
+	notifier gatewayport.RefreshNotifier,
 ) *TenancyService {
-	return &TenancyService{organizations: organizations, projects: projects, virtualKeys: virtualKeys, revisions: revisions, transactions: transactions, keyGenerator: keyGenerator}
+	return &TenancyService{
+		organizations: organizations, projects: projects, virtualKeys: virtualKeys, revisions: revisions,
+		transactions: transactions, keyGenerator: keyGenerator, notifier: notifier,
+	}
 }
 
 func (s *TenancyService) CreateOrganization(ctx context.Context, command dto.CreateOrganization) (dto.OrganizationResult, error) {
@@ -41,7 +47,7 @@ func (s *TenancyService) CreateOrganization(ctx context.Context, command dto.Cre
 		return dto.OrganizationResult{}, mapApplicationError(err)
 	}
 	var revision int64
-	err = s.transactions.Transaction(ctx, func(txCtx context.Context) error {
+	err = s.mutate(ctx, func(txCtx context.Context) error {
 		if err := s.organizations.Save(txCtx, organization); err != nil {
 			return err
 		}
@@ -58,7 +64,7 @@ func (s *TenancyService) CreateOrganization(ctx context.Context, command dto.Cre
 func (s *TenancyService) CreateProject(ctx context.Context, command dto.CreateProject) (dto.ProjectResult, error) {
 	var project *tenantmodel.Project
 	var revision int64
-	err := s.transactions.Transaction(ctx, func(txCtx context.Context) error {
+	err := s.mutate(ctx, func(txCtx context.Context) error {
 		organization, err := s.organizations.FindByID(txCtx, command.OrganizationID)
 		if err != nil {
 			return err
@@ -89,7 +95,7 @@ func (s *TenancyService) CreateVirtualKey(ctx context.Context, command dto.Creat
 	var key *tenantmodel.VirtualKey
 	var generated controlport.GeneratedVirtualKey
 	var revision int64
-	err := s.transactions.Transaction(ctx, func(txCtx context.Context) error {
+	err := s.mutate(ctx, func(txCtx context.Context) error {
 		project, err := s.projects.FindByID(txCtx, command.ProjectID)
 		if err != nil {
 			return err
@@ -149,7 +155,7 @@ func (s *TenancyService) ListOrganizations(ctx context.Context, pagination dto.P
 func (s *TenancyService) UpdateOrganization(ctx context.Context, command dto.UpdateOrganization) (dto.OrganizationResult, error) {
 	var organization *tenantmodel.Organization
 	var revision int64
-	err := s.transactions.Transaction(ctx, func(txCtx context.Context) error {
+	err := s.mutate(ctx, func(txCtx context.Context) error {
 		var err error
 		organization, err = s.organizations.FindByID(txCtx, command.ID)
 		if err != nil {
@@ -202,7 +208,7 @@ func (s *TenancyService) ListProjects(ctx context.Context, organizationID uuid.U
 func (s *TenancyService) UpdateProject(ctx context.Context, command dto.UpdateProject) (dto.ProjectResult, error) {
 	var project *tenantmodel.Project
 	var revision int64
-	err := s.transactions.Transaction(ctx, func(txCtx context.Context) error {
+	err := s.mutate(ctx, func(txCtx context.Context) error {
 		var err error
 		project, err = s.projects.FindByID(txCtx, command.ID)
 		if err != nil {
@@ -269,7 +275,7 @@ func (s *TenancyService) ListVirtualKeys(ctx context.Context, projectID uuid.UUI
 func (s *TenancyService) UpdateVirtualKey(ctx context.Context, command dto.UpdateVirtualKey) (dto.VirtualKeyResult, error) {
 	var key *tenantmodel.VirtualKey
 	var revision int64
-	err := s.transactions.Transaction(ctx, func(txCtx context.Context) error {
+	err := s.mutate(ctx, func(txCtx context.Context) error {
 		var err error
 		key, err = s.virtualKeys.FindByID(txCtx, command.ID)
 		if err != nil {
@@ -323,4 +329,19 @@ func virtualKeyView(key *tenantmodel.VirtualKey) dto.VirtualKeyView {
 		ID: key.ID, ProjectID: key.ProjectID, Name: key.Name, Prefix: key.Prefix, LastFour: key.LastFour,
 		Status: key.Status, ExpiresAt: key.ExpiresAt, CreatedAt: key.CreatedAt, UpdatedAt: key.UpdatedAt,
 	}
+}
+
+func (s *TenancyService) mutate(ctx context.Context, fn func(context.Context) error) error {
+	if err := s.transactions.Transaction(ctx, func(txCtx context.Context) error {
+		if err := s.revisions.Lock(txCtx); err != nil {
+			return err
+		}
+		return fn(txCtx)
+	}); err != nil {
+		return err
+	}
+	if s.notifier != nil {
+		s.notifier.NotifyRefresh()
+	}
+	return nil
 }

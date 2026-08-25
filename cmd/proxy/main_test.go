@@ -12,10 +12,10 @@ import (
 func TestShutdownApplicationOrderAndErrorIsolation(t *testing.T) {
 	var order []string
 	server := &recordingServer{order: &order, shutdownErr: errors.New("http failed")}
-	controlPlane := &recordingControlPlane{order: &order, closeErr: errors.New("database failed")}
+	gateway := &recordingGateway{order: &order, stopErr: errors.New("stop failed"), closeErr: errors.New("database failed")}
 	telemetry := &recordingTelemetry{order: &order, err: errors.New("telemetry failed")}
 
-	shutdownApplication(context.Background(), zap.NewNop(), server, controlPlane, telemetry)
+	shutdownApplication(context.Background(), zap.NewNop(), server, gateway, telemetry)
 
 	want := []string{"not_ready", "stop_reconnect", "http_shutdown", "database_close", "telemetry_shutdown"}
 	if !reflect.DeepEqual(order, want) {
@@ -34,13 +34,17 @@ func (s *recordingServer) Shutdown(context.Context) error {
 	return s.shutdownErr
 }
 
-type recordingControlPlane struct {
+type recordingGateway struct {
 	order    *[]string
+	stopErr  error
 	closeErr error
 }
 
-func (r *recordingControlPlane) Stop() { *r.order = append(*r.order, "stop_reconnect") }
-func (r *recordingControlPlane) Close() error {
+func (r *recordingGateway) Stop(context.Context) error {
+	*r.order = append(*r.order, "stop_reconnect")
+	return r.stopErr
+}
+func (r *recordingGateway) CloseDatabase() error {
 	*r.order = append(*r.order, "database_close")
 	return r.closeErr
 }

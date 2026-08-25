@@ -34,7 +34,7 @@ func NewRuntime(database databaseRuntime, refresher *Refresher, store *gatewaysn
 }
 
 func (r *Runtime) Start(parent context.Context) {
-	if r == nil {
+	if r == nil || r.database == nil && r.refresher == nil {
 		return
 	}
 	r.startOnce.Do(func() {
