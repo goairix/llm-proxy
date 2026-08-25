@@ -30,6 +30,11 @@ func organizationToDomain(record *entity.Organization) (*tenantmodel.Organizatio
 	return domain, nil
 }
 
+// OrganizationFromEntity maps a persisted record through the repository's canonical mapper.
+func OrganizationFromEntity(record *entity.Organization) (*tenantmodel.Organization, error) {
+	return organizationToDomain(record)
+}
+
 func projectToEntity(domain *tenantmodel.Project) *entity.Project {
 	return &entity.Project{
 		BaseEntity:     entity.BaseEntity{ID: domain.ID, CreatedAt: domain.CreatedAt, UpdatedAt: domain.UpdatedAt},
@@ -50,6 +55,11 @@ func projectToDomain(record *entity.Project) (*tenantmodel.Project, error) {
 		return nil, fmt.Errorf("map project: %w", err)
 	}
 	return domain, nil
+}
+
+// ProjectFromEntity maps a persisted record through the repository's canonical mapper.
+func ProjectFromEntity(record *entity.Project) (*tenantmodel.Project, error) {
+	return projectToDomain(record)
 }
 
 func virtualKeyToEntity(domain *tenantmodel.VirtualKey) *entity.VirtualKey {
@@ -87,6 +97,11 @@ func virtualKeyToDomain(record *entity.VirtualKey) (*tenantmodel.VirtualKey, err
 		return nil, fmt.Errorf("map virtual key: %w", err)
 	}
 	return domain, nil
+}
+
+// VirtualKeyFromEntity maps a persisted record through the repository's canonical mapper.
+func VirtualKeyFromEntity(record *entity.VirtualKey) (*tenantmodel.VirtualKey, error) {
+	return virtualKeyToDomain(record)
 }
 
 func cloneTime(value *time.Time) *time.Time {

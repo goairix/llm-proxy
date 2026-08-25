@@ -34,6 +34,11 @@ func providerToDomain(record *entity.Provider) (*catalogmodel.Provider, error) {
 	return domain, nil
 }
 
+// ProviderFromEntity maps a persisted record through the repository's canonical mapper.
+func ProviderFromEntity(record *entity.Provider) (*catalogmodel.Provider, error) {
+	return providerToDomain(record)
+}
+
 func credentialToEntity(domain *catalogmodel.ProviderCredential) *entity.ProviderCredential {
 	organizationID, projectID := scopeIDs(domain.Scope)
 	return &entity.ProviderCredential{
@@ -73,6 +78,11 @@ func credentialToDomain(record *entity.ProviderCredential) (*catalogmodel.Provid
 		return nil, fmt.Errorf("map provider credential: %w", err)
 	}
 	return domain, nil
+}
+
+// ProviderCredentialFromEntity maps a persisted record through the repository's canonical mapper.
+func ProviderCredentialFromEntity(record *entity.ProviderCredential) (*catalogmodel.ProviderCredential, error) {
+	return credentialToDomain(record)
 }
 
 func deploymentToEntity(domain *catalogmodel.Deployment) (*entity.Deployment, error) {
@@ -122,6 +132,11 @@ func deploymentToDomain(record *entity.Deployment) (*catalogmodel.Deployment, er
 	return domain, nil
 }
 
+// DeploymentFromEntity maps a persisted record through the repository's canonical mapper.
+func DeploymentFromEntity(record *entity.Deployment) (*catalogmodel.Deployment, error) {
+	return deploymentToDomain(record)
+}
+
 func modelAliasToEntity(domain *catalogmodel.ModelAlias) *entity.ModelAlias {
 	return &entity.ModelAlias{
 		BaseEntity: baseToEntity(domain.Entity),
@@ -142,6 +157,11 @@ func modelAliasToDomain(record *entity.ModelAlias) (*catalogmodel.ModelAlias, er
 		return nil, fmt.Errorf("map model alias: %w", err)
 	}
 	return domain, nil
+}
+
+// ModelAliasFromEntity maps a persisted record through the repository's canonical mapper.
+func ModelAliasFromEntity(record *entity.ModelAlias) (*catalogmodel.ModelAlias, error) {
+	return modelAliasToDomain(record)
 }
 
 func routeTargetToEntity(domain *catalogmodel.RouteTarget) *entity.RouteTarget {
@@ -168,6 +188,11 @@ func routeTargetToDomain(record *entity.RouteTarget) (*catalogmodel.RouteTarget,
 		return nil, fmt.Errorf("map route target: %w", err)
 	}
 	return domain, nil
+}
+
+// RouteTargetFromEntity maps a persisted record through the repository's canonical mapper.
+func RouteTargetFromEntity(record *entity.RouteTarget) (*catalogmodel.RouteTarget, error) {
+	return routeTargetToDomain(record)
 }
 
 func baseToEntity(domain sharedmodel.Entity) entity.BaseEntity {
