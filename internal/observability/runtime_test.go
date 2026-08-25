@@ -16,7 +16,7 @@ import (
 	"go.uber.org/zap"
 	"google.golang.org/protobuf/proto"
 
-	"github.com/goairix/llm-proxy/internal/config"
+	"github.com/goairix/llm-proxy/internal/infrastructure/config"
 )
 
 func TestRuntimeExportsOTLPHTTP(t *testing.T) {

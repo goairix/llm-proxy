@@ -19,7 +19,7 @@ import (
 	semconv "go.opentelemetry.io/otel/semconv/v1.43.0"
 	"go.uber.org/zap"
 
-	"github.com/goairix/llm-proxy/internal/config"
+	"github.com/goairix/llm-proxy/internal/infrastructure/config"
 )
 
 // Runtime owns the OpenTelemetry providers and their lifecycle.

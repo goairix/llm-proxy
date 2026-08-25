@@ -11,8 +11,8 @@ import (
 	"go.uber.org/zap"
 
 	appRuntime "github.com/goairix/llm-proxy/internal/application/runtime"
-	"github.com/goairix/llm-proxy/internal/config"
 	"github.com/goairix/llm-proxy/internal/dashboard"
+	"github.com/goairix/llm-proxy/internal/infrastructure/config"
 	"github.com/goairix/llm-proxy/internal/middleware"
 	"github.com/goairix/llm-proxy/internal/observability"
 	"github.com/goairix/llm-proxy/internal/proxy"

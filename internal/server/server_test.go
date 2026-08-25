@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/goairix/llm-proxy/internal/config"
 	"github.com/goairix/llm-proxy/internal/dashboard"
+	"github.com/goairix/llm-proxy/internal/infrastructure/config"
 	"github.com/goairix/llm-proxy/internal/observability"
 	"go.uber.org/zap"
 )

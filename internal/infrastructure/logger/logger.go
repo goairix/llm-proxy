@@ -11,7 +11,7 @@ import (
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 
-	"github.com/goairix/llm-proxy/internal/config"
+	"github.com/goairix/llm-proxy/internal/infrastructure/config"
 )
 
 // New creates a zap logger that writes to both stdout and a rotating log file.

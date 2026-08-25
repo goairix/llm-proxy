@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/goairix/llm-proxy/internal/config"
+	"github.com/goairix/llm-proxy/internal/infrastructure/config"
 )
 
 var otelConfigEnvNames = []string{

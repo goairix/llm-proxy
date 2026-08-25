@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/goairix/llm-proxy/internal/config"
+	"github.com/goairix/llm-proxy/internal/infrastructure/config"
 )
 
 const (

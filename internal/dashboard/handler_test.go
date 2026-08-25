@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/goairix/llm-proxy/internal/config"
+	"github.com/goairix/llm-proxy/internal/infrastructure/config"
 	"github.com/goairix/llm-proxy/internal/tokenusage"
 )
 

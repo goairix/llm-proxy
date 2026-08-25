@@ -9,7 +9,7 @@ import (
 	"time"
 
 	appRuntime "github.com/goairix/llm-proxy/internal/application/runtime"
-	"github.com/goairix/llm-proxy/internal/config"
+	"github.com/goairix/llm-proxy/internal/infrastructure/config"
 )
 
 //go:embed web/index.html
