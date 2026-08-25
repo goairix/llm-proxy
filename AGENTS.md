@@ -89,6 +89,14 @@ docker build -t llm-proxy .
 
 ## 关键实现约束
 
+### 数据库与关联完整性
+
+- 数据库禁止创建或依赖外键约束；迁移、GORM Entity、索引定义和手写 SQL 均不得包含 `FOREIGN KEY`、`REFERENCES` 或 GORM `constraint`/关联声明。
+- 资源之间仍使用 UUID 字段保存逻辑关联，并为常用关联查询建立普通索引；数据库只负责字段类型、非空、唯一性等单表约束。
+- 父资源存在性、租户归属、作用域匹配、引用状态和停用保护必须由 Application Service 在同一事务内显式读取并校验，不能依赖数据库级联或外键错误兜底。
+- Repository 只做逐字段映射和显式查询，不使用 GORM Association、Preload、自动级联保存或级联删除。
+- 新增持久化 Entity 或迁移时必须保留“无 GORM Relationship、无数据库外键”的自动化测试。
+
 ### 代理与流式响应
 
 - 必须保留 SSE 流式传输能力。任何包装 `http.ResponseWriter` 的类型都要在底层支持时继续实现并转发 `http.Flusher`。

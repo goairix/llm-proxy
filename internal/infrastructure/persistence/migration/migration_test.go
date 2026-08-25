@@ -68,6 +68,13 @@ func TestPostgresInitialMigration(t *testing.T) {
 	assertModelColumnType(t, db, &entity.Organization{}, "id", "uuid")
 	assertModelColumnType(t, db, &entity.VirtualKey{}, "hash", "bytea")
 	assertModelColumnType(t, db, &entity.Deployment{}, "capabilities", "text")
+	var foreignKeyCount int64
+	if err := db.Raw(`SELECT COUNT(*) FROM information_schema.table_constraints WHERE constraint_schema = current_schema() AND constraint_type = 'FOREIGN KEY'`).Scan(&foreignKeyCount).Error; err != nil {
+		t.Fatalf("count foreign keys: %v", err)
+	}
+	if foreignKeyCount != 0 {
+		t.Fatalf("foreign key count = %d; want 0", foreignKeyCount)
+	}
 
 	if err := Down(db); err != nil {
 		t.Fatalf("Down() error = %v", err)

@@ -138,9 +138,9 @@ Project 可见的逻辑模型名称。数据面请求中的 `model` 始终先在
 
 参考项目采用领域模型与 GORM Entity 分离的方式，本项目沿用这一结构。
 
-- 所有领域实体主键、外键和关联记录主键均使用 `github.com/google/uuid.UUID`。
+- 所有领域实体主键和逻辑关联 ID 均使用 `github.com/google/uuid.UUID`。
 - 所有新业务 ID 必须由领域构造器调用 `uuid.NewV7()` 生成。
-- PostgreSQL 使用原生 `uuid` 列保存主键和外键，不保存 UUID 字符串。
+- PostgreSQL 使用原生 `uuid` 列保存主键和逻辑关联 ID，不保存 UUID 字符串。
 - 不使用 `uuid_generate_v7()` 数据库默认值，避免依赖 PostgreSQL 扩展并消除双重生成来源。
 - 所有创建入口，包括迁移、测试夹具和内部引导，都必须显式生成 UUIDv7。
 - 持久化 Entity 统一嵌入 `BaseEntity`，字段为 `ID`、`CreatedAt`、`UpdatedAt`。
@@ -152,6 +152,8 @@ Project 可见的逻辑模型名称。数据面请求中的 `model` 始终先在
 ## 7. 仓储、事务与数据库可替换性
 
 Domain 为聚合根定义仓储接口，Application 只依赖这些接口及 `TransactionManager`。Infrastructure 提供 GORM 实现，并通过事务上下文让同一用例内的多个 Repository 共享事务。
+
+数据库层禁止创建外键约束。Entity 只保存 UUID 逻辑关联字段和普通索引，不声明 GORM Relationship、Association、级联保存或级联删除。父资源存在性、租户归属、凭据与 Deployment 作用域、Alias 与 RouteTarget 引用状态等跨表约束，全部由 Application Service 在同一事务内显式查询并校验。数据库继续承担非空、唯一索引和字段类型等单表约束。
 
 核心接口按职责拆分：
 
@@ -475,7 +477,8 @@ Gateway 显式关闭时不创建数据库连接、刷新 goroutine 或统一网�
 ### 19.3 PostgreSQL 集成
 
 - 使用真实 PostgreSQL 执行迁移、回滚和仓储集成测试，不使用 SQLite 代替 PostgreSQL 语义。
-- 验证所有业务主键和外键为原生 UUID，且由应用生成的值为 UUIDv7。
+- 验证所有业务主键和逻辑关联 ID 为原生 UUID，且由应用生成的主键为 UUIDv7。
+- 验证业务表不存在数据库外键约束，GORM Entity 不声明 Relationship。
 - 验证事务回滚时业务写入与 ConfigRevision 均不生效。
 - 验证一致性读取不会发布引用不完整的快照。
 

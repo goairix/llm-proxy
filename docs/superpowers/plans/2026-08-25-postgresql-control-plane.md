@@ -485,7 +485,7 @@ type BaseEntity struct {
 }
 ```
 
-Tenancy/Catalog Entity 使用原生 `uuid.UUID` 外键。能力 JSON 保存到 `text`；哈希、nonce、密文和包装数据密钥使用 `bytea`。每个 Entity 显式实现稳定复数表名。不要添加数据库 UUID 默认值。
+Tenancy/Catalog Entity 使用原生 `uuid.UUID` 保存逻辑关联 ID。能力 JSON 保存到 `text`；哈希、nonce、密文和包装数据密钥使用 `bytea`。每个 Entity 显式实现稳定复数表名。不要添加数据库 UUID 默认值。禁止声明 GORM Relationship、Association 或 `constraint`，迁移不得创建任何数据库外键；跨资源关联完整性全部由 Application Service 在事务内校验。
 
 - [ ] **步骤 4：实现事务管理器**
 
@@ -504,7 +504,7 @@ type Manager interface {
 
 迁移 ID 使用 `2026082501_initial_control_plane`。Up 顺序创建 organizations、projects、virtual_keys、providers、provider_credentials、deployments、model_aliases、route_targets、config_revisions；Down 仅按反向依赖顺序删除这些表。Up 最后创建一条 UUIDv7 的 revision=0 基础记录。
 
-禁止使用 `uuid_generate_v7()`、`jsonb`、数组或手写 PostgreSQL 专属查询。索引至少覆盖父级列表、VirtualKey 哈希唯一索引、Project 内 Alias 名称唯一索引和 RouteTarget 外键。
+禁止使用 `uuid_generate_v7()`、`jsonb`、数组、数据库外键或手写 PostgreSQL 专属查询。普通索引至少覆盖父级列表、VirtualKey 哈希唯一索引、Project 内 Alias 名称唯一索引和 RouteTarget 逻辑关联 ID。
 
 - [ ] **步骤 6：实现迁移 CLI**
 

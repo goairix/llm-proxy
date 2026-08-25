@@ -16,10 +16,9 @@ func (Organization) TableName() string { return "organizations" }
 
 type Project struct {
 	BaseEntity
-	OrganizationID uuid.UUID    `gorm:"type:uuid;not null;index:idx_projects_organization_id"`
-	Organization   Organization `gorm:"foreignKey:OrganizationID;references:ID;constraint:OnUpdate:RESTRICT,OnDelete:RESTRICT"`
-	Name           string       `gorm:"type:varchar(255);not null"`
-	Status         string       `gorm:"type:varchar(32);not null;index:idx_projects_status"`
+	OrganizationID uuid.UUID `gorm:"type:uuid;not null;index:idx_projects_organization_id"`
+	Name           string    `gorm:"type:varchar(255);not null"`
+	Status         string    `gorm:"type:varchar(32);not null;index:idx_projects_status"`
 }
 
 func (Project) TableName() string { return "projects" }
@@ -27,7 +26,6 @@ func (Project) TableName() string { return "projects" }
 type VirtualKey struct {
 	BaseEntity
 	ProjectID uuid.UUID  `gorm:"type:uuid;not null;index:idx_virtual_keys_project_id"`
-	Project   Project    `gorm:"foreignKey:ProjectID;references:ID;constraint:OnUpdate:RESTRICT,OnDelete:RESTRICT"`
 	Name      string     `gorm:"type:varchar(255);not null"`
 	Hash      []byte     `gorm:"type:bytea;not null;uniqueIndex:ux_virtual_keys_hash"`
 	Prefix    string     `gorm:"type:varchar(64);not null"`

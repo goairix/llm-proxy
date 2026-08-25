@@ -22,10 +22,11 @@ func Open(ctx context.Context, cfg config.DatabaseConfig) (*gorm.DB, error) {
 	}
 
 	db, err := gorm.Open(postgres.New(postgres.Config{DSN: cfg.DSN}), &gorm.Config{
-		DisableAutomaticPing: true,
-		Logger:               logger.Default.LogMode(logger.Silent),
-		NowFunc:              utcNow,
-		TranslateError:       true,
+		DisableAutomaticPing:                     true,
+		DisableForeignKeyConstraintWhenMigrating: true,
+		Logger:                                   logger.Default.LogMode(logger.Silent),
+		NowFunc:                                  utcNow,
+		TranslateError:                           true,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("open postgres: %w", err)
