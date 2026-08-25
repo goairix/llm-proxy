@@ -14,7 +14,7 @@ import (
 
 	"github.com/goairix/llm-proxy/internal/infrastructure/config"
 	"github.com/goairix/llm-proxy/internal/infrastructure/logger"
-	"github.com/goairix/llm-proxy/internal/observability"
+	"github.com/goairix/llm-proxy/internal/infrastructure/observability"
 	"github.com/goairix/llm-proxy/internal/server"
 )
 
