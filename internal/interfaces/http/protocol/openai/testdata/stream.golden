@@ -1,0 +1,11 @@
+data: {"id":"chatcmpl-0198dd23-236d-7b6c-8c10-fcd0fe1a3c11","object":"chat.completion.chunk","created":1777777777,"model":"assistant","choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":null}],"usage":null}
+
+data: {"id":"chatcmpl-0198dd23-236d-7b6c-8c10-fcd0fe1a3c11","object":"chat.completion.chunk","created":1777777777,"model":"assistant","choices":[{"index":0,"delta":{"content":"hel"},"finish_reason":null}],"usage":null}
+
+data: {"id":"chatcmpl-0198dd23-236d-7b6c-8c10-fcd0fe1a3c11","object":"chat.completion.chunk","created":1777777777,"model":"assistant","choices":[{"index":0,"delta":{"content":"lo"},"finish_reason":null}],"usage":null}
+
+data: {"id":"chatcmpl-0198dd23-236d-7b6c-8c10-fcd0fe1a3c11","object":"chat.completion.chunk","created":1777777777,"model":"assistant","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":null}
+
+data: {"id":"chatcmpl-0198dd23-236d-7b6c-8c10-fcd0fe1a3c11","object":"chat.completion.chunk","created":1777777777,"model":"assistant","choices":[],"usage":{"prompt_tokens":2,"completion_tokens":1,"total_tokens":3}}
+
+data: [DONE]
