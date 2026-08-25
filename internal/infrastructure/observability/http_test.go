@@ -23,8 +23,10 @@ func TestNormalizeEndpoint(t *testing.T) {
 		{provider: "openai", path: "/openai/v1/responses", want: "responses"},
 		{provider: "openai", path: "/openai/v1/responses/compact", want: "responses.compact"},
 		{provider: "openai", path: "/openai/v1/chat/completions", want: "chat.completions"},
+		{provider: "openai", path: "/v1/chat/completions", want: "chat.completions"},
 		{provider: "openai", path: "/openai/v1/completions", want: "completions"},
 		{provider: "anthropic", path: "/anthropic/v1/messages", want: "messages"},
+		{provider: "anthropic", path: "/v1/messages", want: "messages"},
 		{provider: "openai", path: "/openai/v1/responses/resp_secret", want: "other"},
 		{provider: "anthropic", path: "/anthropic/v1/messages/msg_secret", want: "other"},
 	}
@@ -110,6 +112,40 @@ func TestWrapHandlerSanitizesURLAndRecordsMetrics(t *testing.T) {
 	assertMetricSum(t, data, "llm_proxy.requests", map[string]string{"provider": "openai", "endpoint": "other", "outcome": "rate_limited"}, 1)
 	assertMetricSum(t, data, "llm_proxy.requests.in_flight", map[string]string{"provider": "openai", "endpoint": "other"}, 0)
 	assertMetricSum(t, data, "llm_proxy.rate_limit.rejections", map[string]string{"provider": "openai", "endpoint": "other", "outcome": "rate_limited"}, 1)
+}
+
+func TestWrapHandlerSanitizesUnifiedGatewayRoute(t *testing.T) {
+	runtime, spans, reader := newHTTPTestRuntime(t)
+	handler := runtime.WrapHandler("openai", http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/v1/chat/completions" || request.URL.RawQuery != "project_id=project-secret" {
+			t.Fatalf("downstream URL=%s", request.URL.String())
+		}
+		if request.Header.Get("Authorization") != "Bearer virtual-key-secret" {
+			t.Fatalf("downstream authorization=%q", request.Header.Get("Authorization"))
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions?project_id=project-secret", strings.NewReader(`{"model":"model-secret"}`))
+	request.Header.Set("Authorization", "Bearer virtual-key-secret")
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status=%d", recorder.Code)
+	}
+
+	ended := spans.Ended()
+	if len(ended) != 1 {
+		t.Fatalf("ended spans=%d", len(ended))
+	}
+	assertSpanDoesNotContain(t, ended[0], "project-secret", "virtual-key-secret", "model-secret")
+
+	var data metricdata.ResourceMetrics
+	if err := reader.Collect(context.Background(), &data); err != nil {
+		t.Fatal(err)
+	}
+	assertMetricSum(t, data, "llm_proxy.requests", map[string]string{
+		"provider": "openai", "endpoint": "chat.completions", "outcome": "success",
+	}, 1)
 }
 
 func TestTransportPropagatesTraceAndRestoresUpstreamURL(t *testing.T) {

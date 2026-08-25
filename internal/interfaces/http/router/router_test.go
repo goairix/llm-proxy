@@ -19,6 +19,70 @@ type identityInstrumenter struct{}
 
 func (identityInstrumenter) WrapHandler(_ string, next http.Handler) http.Handler { return next }
 
+func TestRouterUnifiedGatewayRoutesAreExactAndOptional(t *testing.T) {
+	openAICalls := 0
+	anthropicCalls := 0
+	handler := New(Config{BaseURL: "http://localhost:8080", Version: "1.0.0"}, Dependencies{
+		Logger:          zap.NewNop(),
+		Instrumenter:    identityInstrumenter{},
+		Readiness:       appRuntime.NewReadiness(),
+		Stats:           &dashboard.Stats{},
+		ObserverFactory: tokenusage.NewObserver,
+		OpenAIProxy:     http.NotFoundHandler(),
+		AnthropicProxy:  http.NotFoundHandler(),
+		OpenAIGateway: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			openAICalls++
+			w.WriteHeader(http.StatusCreated)
+		}),
+		AnthropicGateway: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			anthropicCalls++
+			w.WriteHeader(http.StatusAccepted)
+		}),
+	})
+
+	for _, test := range []struct {
+		path       string
+		wantStatus int
+	}{
+		{path: "/v1/chat/completions", wantStatus: http.StatusCreated},
+		{path: "/v1/messages", wantStatus: http.StatusAccepted},
+	} {
+		request := httptest.NewRequest(http.MethodPost, test.path, strings.NewReader(`{}`))
+		recorder := httptest.NewRecorder()
+		handler.ServeHTTP(recorder, request)
+		if recorder.Code != test.wantStatus {
+			t.Fatalf("POST %s status=%d, want %d", test.path, recorder.Code, test.wantStatus)
+		}
+	}
+	if openAICalls != 1 || anthropicCalls != 1 {
+		t.Fatalf("gateway calls openai=%d anthropic=%d", openAICalls, anthropicCalls)
+	}
+
+	for _, path := range []string{"/v1/chat/completions", "/v1/messages"} {
+		recorder := httptest.NewRecorder()
+		handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, path, nil))
+		if recorder.Code != http.StatusMethodNotAllowed || recorder.Header().Get("Allow") != http.MethodPost {
+			t.Fatalf("GET %s status=%d allow=%q", path, recorder.Code, recorder.Header().Get("Allow"))
+		}
+	}
+	unknown := httptest.NewRecorder()
+	handler.ServeHTTP(unknown, httptest.NewRequest(http.MethodPost, "/v1/chat/completions/extra", nil))
+	if unknown.Code != http.StatusOK || !strings.Contains(unknown.Body.String(), "LLM 代理控制台") {
+		t.Fatalf("non-exact route status=%d body=%s", unknown.Code, unknown.Body.String())
+	}
+
+	disabled := New(Config{BaseURL: "http://localhost:8080", Version: "1.0.0"}, Dependencies{
+		Logger: zap.NewNop(), Instrumenter: identityInstrumenter{}, Readiness: appRuntime.NewReadiness(),
+		Stats: &dashboard.Stats{}, ObserverFactory: tokenusage.NewObserver,
+		OpenAIProxy: http.NotFoundHandler(), AnthropicProxy: http.NotFoundHandler(),
+	})
+	recorder := httptest.NewRecorder()
+	disabled.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil))
+	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), "LLM 代理控制台") {
+		t.Fatalf("disabled route status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+}
+
 func TestRouterTransparentProviderRoutes(t *testing.T) {
 	type upstreamRequest struct {
 		path          string

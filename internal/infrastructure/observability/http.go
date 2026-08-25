@@ -213,13 +213,13 @@ func normalizeEndpoint(provider, path string) string {
 			return "responses"
 		case "/openai/v1/responses/compact":
 			return "responses.compact"
-		case "/openai/v1/chat/completions":
+		case "/openai/v1/chat/completions", "/v1/chat/completions":
 			return "chat.completions"
 		case "/openai/v1/completions":
 			return "completions"
 		}
 	case "anthropic":
-		if path == "/anthropic/v1/messages" {
+		if path == "/anthropic/v1/messages" || path == "/v1/messages" {
 			return "messages"
 		}
 	}

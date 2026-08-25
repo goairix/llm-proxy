@@ -76,7 +76,7 @@ func TestOfflineControlPlaneDoesNotBreakTransparentProxy(t *testing.T) {
 	}
 	root := NewRootHandler(
 		cfg, logger, telemetry, appRuntime.NewReadiness(), &dashboard.Stats{}, tokenusage.NewObserver,
-		openAI, anthropic, controlPlane,
+		openAI, anthropic, NewUnifiedGatewayHandlers(cfg, gateway), controlPlane,
 	)
 
 	controlRequest := httptest.NewRequest(http.MethodPost, "/v1/organizations", strings.NewReader(`{"name":"Acme"}`))

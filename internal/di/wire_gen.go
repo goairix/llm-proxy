@@ -36,11 +36,12 @@ func Initialize(ctx context.Context, cfg *config.Config) (*App, error) {
 		return nil, err
 	}
 	gatewayRuntime := provider.NewGatewayRuntime(cfg, logger)
+	unifiedGatewayHandlers := provider.NewUnifiedGatewayHandlers(cfg, gatewayRuntime)
 	controlPlaneRuntime, err := provider.NewControlPlaneRuntime(cfg, gatewayRuntime)
 	if err != nil {
 		return nil, err
 	}
-	rootHandler := provider.NewRootHandler(cfg, logger, runtime, readiness, stats, usageObserverFactory, openAIHandler, anthropicHandler, controlPlaneRuntime)
+	rootHandler := provider.NewRootHandler(cfg, logger, runtime, readiness, stats, usageObserverFactory, openAIHandler, anthropicHandler, unifiedGatewayHandlers, controlPlaneRuntime)
 	server := provider.NewHTTPServer(cfg, rootHandler, logger, readiness)
 	app := &App{
 		Server:    server,
