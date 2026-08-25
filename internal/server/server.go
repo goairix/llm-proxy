@@ -14,9 +14,9 @@ import (
 	"github.com/goairix/llm-proxy/internal/dashboard"
 	"github.com/goairix/llm-proxy/internal/infrastructure/config"
 	"github.com/goairix/llm-proxy/internal/infrastructure/observability"
+	"github.com/goairix/llm-proxy/internal/infrastructure/proxy"
+	"github.com/goairix/llm-proxy/internal/infrastructure/proxy/tokenusage"
 	"github.com/goairix/llm-proxy/internal/middleware"
-	"github.com/goairix/llm-proxy/internal/proxy"
-	"github.com/goairix/llm-proxy/internal/tokenusage"
 )
 
 // Version is the current server version.

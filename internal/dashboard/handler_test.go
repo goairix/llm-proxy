@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	"github.com/goairix/llm-proxy/internal/infrastructure/config"
-	"github.com/goairix/llm-proxy/internal/tokenusage"
+	"github.com/goairix/llm-proxy/internal/infrastructure/proxy/tokenusage"
 )
 
 // newTestHandler creates a Handler with a zeroed Stats and a predictable config.
