@@ -7,20 +7,18 @@ import (
 	"sync"
 
 	"golang.org/x/time/rate"
-
-	"github.com/goairix/llm-proxy/internal/infrastructure/config"
 )
 
 // RateLimiter enforces per-API-key rate limiting using token bucket algorithm.
 type RateLimiter struct {
-	cfg      config.RateLimitConfig
+	cfg      RateLimitConfig
 	limiters sync.Map // map[string]*rate.Limiter
 	whiteset map[string]struct{}
 }
 
 // NewRateLimiter creates a RateLimiter from the given config.
 // The whitelist is converted to a set for O(1) lookup.
-func NewRateLimiter(cfg config.RateLimitConfig) *RateLimiter {
+func NewRateLimiter(cfg RateLimitConfig) *RateLimiter {
 	whiteset := make(map[string]struct{}, len(cfg.Whitelist))
 	for _, key := range cfg.Whitelist {
 		whiteset[key] = struct{}{}

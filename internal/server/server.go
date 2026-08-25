@@ -11,12 +11,12 @@ import (
 	"go.uber.org/zap"
 
 	appRuntime "github.com/goairix/llm-proxy/internal/application/runtime"
-	"github.com/goairix/llm-proxy/internal/dashboard"
 	"github.com/goairix/llm-proxy/internal/infrastructure/config"
 	"github.com/goairix/llm-proxy/internal/infrastructure/observability"
 	"github.com/goairix/llm-proxy/internal/infrastructure/proxy"
 	"github.com/goairix/llm-proxy/internal/infrastructure/proxy/tokenusage"
-	"github.com/goairix/llm-proxy/internal/middleware"
+	"github.com/goairix/llm-proxy/internal/interfaces/http/handler/dashboard"
+	"github.com/goairix/llm-proxy/internal/interfaces/http/middleware"
 )
 
 // Version is the current server version.
@@ -44,11 +44,11 @@ func New(cfg *config.Config, logger *zap.Logger, telemetry *observability.Runtim
 	if baseURL == "" {
 		baseURL = fmt.Sprintf("http://localhost:%d", cfg.Server.Port)
 	}
-	dashHandler := dashboard.NewHandler(stats, cfg.RateLimit, Version, baseURL)
+	dashHandler := dashboard.NewHandler(stats, toDashboardRateLimit(cfg.RateLimit), Version, baseURL)
 	mux.Handle("/", dashHandler)
 
 	// Rate limiter shared across providers
-	rateLimiter := middleware.NewRateLimiter(cfg.RateLimit)
+	rateLimiter := middleware.NewRateLimiter(toMiddlewareRateLimit(cfg.RateLimit))
 
 	// Logging middleware (outermost layer)
 	loggingMiddleware := middleware.Logging(logger)
@@ -81,6 +81,33 @@ func New(cfg *config.Config, logger *zap.Logger, telemetry *observability.Runtim
 		Handler: mux,
 	}
 	return srv, nil
+}
+
+func toMiddlewareRateLimit(cfg config.RateLimitConfig) middleware.RateLimitConfig {
+	overrides := make(map[string]middleware.RateLimitRule, len(cfg.Overrides))
+	for key, rule := range cfg.Overrides {
+		overrides[key] = middleware.RateLimitRule{
+			RequestsPerSecond: rule.RequestsPerSecond,
+			Burst:             rule.Burst,
+		}
+	}
+	return middleware.RateLimitConfig{
+		Enabled: cfg.Enabled,
+		Default: middleware.RateLimitRule{
+			RequestsPerSecond: cfg.Default.RequestsPerSecond,
+			Burst:             cfg.Default.Burst,
+		},
+		Whitelist: append([]string(nil), cfg.Whitelist...),
+		Overrides: overrides,
+	}
+}
+
+func toDashboardRateLimit(cfg config.RateLimitConfig) dashboard.RateLimitView {
+	return dashboard.RateLimitView{
+		Enabled:           cfg.Enabled,
+		RequestsPerSecond: cfg.Default.RequestsPerSecond,
+		Burst:             cfg.Default.Burst,
+	}
 }
 
 // Start begins listening and serving HTTP requests. It blocks until the server

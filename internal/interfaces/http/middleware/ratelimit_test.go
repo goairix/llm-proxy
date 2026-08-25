@@ -4,8 +4,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
-
-	"github.com/goairix/llm-proxy/internal/infrastructure/config"
 )
 
 // okHandler is a simple handler that always responds 200 OK.
@@ -15,9 +13,9 @@ var okHandler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 
 // TestRateLimiterDisabled verifies that a disabled rate limiter allows all requests through.
 func TestRateLimiterDisabled(t *testing.T) {
-	cfg := config.RateLimitConfig{
+	cfg := RateLimitConfig{
 		Enabled: false,
-		Default: config.RateLimitRule{
+		Default: RateLimitRule{
 			RequestsPerSecond: 0.001, // effectively zero — would block everything if enabled
 			Burst:             0,
 		},
@@ -41,9 +39,9 @@ func TestRateLimiterDisabled(t *testing.T) {
 // rate limiting even under burst conditions.
 func TestRateLimiterWhitelistBypassesBurst(t *testing.T) {
 	const whitelistedKey = "sk-whitelisted"
-	cfg := config.RateLimitConfig{
+	cfg := RateLimitConfig{
 		Enabled: true,
-		Default: config.RateLimitRule{
+		Default: RateLimitRule{
 			RequestsPerSecond: 1,
 			Burst:             1,
 		},
@@ -69,13 +67,13 @@ func TestRateLimiterWhitelistBypassesBurst(t *testing.T) {
 // uses the custom rate limit rules.
 func TestRateLimiterOverrideKeyUsesCustomLimits(t *testing.T) {
 	const overrideKey = "sk-override"
-	cfg := config.RateLimitConfig{
+	cfg := RateLimitConfig{
 		Enabled: true,
-		Default: config.RateLimitRule{
+		Default: RateLimitRule{
 			RequestsPerSecond: 1000, // very permissive default
 			Burst:             1000,
 		},
-		Overrides: map[string]config.RateLimitRule{
+		Overrides: map[string]RateLimitRule{
 			overrideKey: {
 				RequestsPerSecond: 1,
 				Burst:             1, // only 1 allowed per burst
@@ -112,9 +110,9 @@ func TestRateLimiterOverrideKeyUsesCustomLimits(t *testing.T) {
 // TestRateLimiterDefaultKeyGetRateLimited verifies that a default key is rate limited
 // once the burst is exceeded.
 func TestRateLimiterDefaultKeyGetRateLimited(t *testing.T) {
-	cfg := config.RateLimitConfig{
+	cfg := RateLimitConfig{
 		Enabled: true,
-		Default: config.RateLimitRule{
+		Default: RateLimitRule{
 			RequestsPerSecond: 1,
 			Burst:             1, // only 1 token in the bucket
 		},

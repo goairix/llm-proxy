@@ -7,19 +7,16 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/goairix/llm-proxy/internal/infrastructure/config"
-	"github.com/goairix/llm-proxy/internal/infrastructure/proxy/tokenusage"
+	appRuntime "github.com/goairix/llm-proxy/internal/application/runtime"
 )
 
 // newTestHandler creates a Handler with a zeroed Stats and a predictable config.
 func newTestHandler(version string) (*Handler, *Stats) {
 	stats := &Stats{}
-	cfg := config.RateLimitConfig{
-		Enabled: true,
-		Default: config.RateLimitRule{
-			RequestsPerSecond: 10,
-			Burst:             20,
-		},
+	cfg := RateLimitView{
+		Enabled:           true,
+		RequestsPerSecond: 10,
+		Burst:             20,
 	}
 	h := NewHandler(stats, cfg, version, "http://localhost:8080")
 	return h, stats
@@ -141,10 +138,10 @@ func TestHandler_UptimeIncreasing(t *testing.T) {
 
 func TestHandler_TokenStatsInjected(t *testing.T) {
 	h, stats := newTestHandler("1.0.0")
-	stats.AddTokenUsage("openai", tokenusage.Usage{Input: 100, Output: 20, CacheRead: 30, CacheWrite: 5, Reasoning: 8})
-	stats.AddTokenUsage("anthropic", tokenusage.Usage{Input: 50, Output: 10, CacheRead: 15, CacheWrite: 4, Reasoning: 3})
+	stats.AddTokenUsage("openai", appRuntime.TokenUsage{Input: 100, Output: 20, CacheRead: 30, CacheWrite: 5, Reasoning: 8})
+	stats.AddTokenUsage("anthropic", appRuntime.TokenUsage{Input: 50, Output: 10, CacheRead: 15, CacheWrite: 4, Reasoning: 3})
 	stats.AddMissingUsage("openai")
-	stats.AddTokenUsage("unknown", tokenusage.Usage{Input: 999, Output: 999})
+	stats.AddTokenUsage("unknown", appRuntime.TokenUsage{Input: 999, Output: 999})
 	stats.AddMissingUsage("unknown")
 
 	rec := httptest.NewRecorder()

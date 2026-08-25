@@ -9,7 +9,6 @@ import (
 	"time"
 
 	appRuntime "github.com/goairix/llm-proxy/internal/application/runtime"
-	"github.com/goairix/llm-proxy/internal/infrastructure/config"
 )
 
 //go:embed web/index.html
@@ -96,13 +95,20 @@ func addTokenUsage(stats *TokenStats, usage appRuntime.TokenUsage) {
 type Handler struct {
 	stats     *Stats
 	startTime time.Time
-	cfg       config.RateLimitConfig
+	cfg       RateLimitView
 	version   string
 	baseURL   string
 }
 
+// RateLimitView contains the rate-limit values rendered by the dashboard.
+type RateLimitView struct {
+	Enabled           bool
+	RequestsPerSecond float64
+	Burst             int
+}
+
 // NewHandler creates a new dashboard Handler.
-func NewHandler(stats *Stats, cfg config.RateLimitConfig, version, baseURL string) *Handler {
+func NewHandler(stats *Stats, cfg RateLimitView, version, baseURL string) *Handler {
 	return &Handler{
 		stats:     stats,
 		startTime: time.Now(),
@@ -191,8 +197,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, _ *http.Request) {
 		},
 		RateLimit: rateLimitData{
 			Enabled:           h.cfg.Enabled,
-			RequestsPerSecond: h.cfg.Default.RequestsPerSecond,
-			Burst:             h.cfg.Default.Burst,
+			RequestsPerSecond: h.cfg.RequestsPerSecond,
+			Burst:             h.cfg.Burst,
 		},
 		Tokens: tokenData{
 			Total:     snapshotTokenStats(&h.stats.Tokens.Total),
