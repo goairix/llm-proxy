@@ -140,3 +140,46 @@ func TestRouterHealthMethodsReadinessAndDashboardFallback(t *testing.T) {
 		t.Fatalf("fallback response = %d", fallbackRecorder.Code)
 	}
 }
+
+func TestRouterMountsOnlyKnownControlPlaneResources(t *testing.T) {
+	controlCalls := 0
+	controlPlane := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		controlCalls++
+		w.WriteHeader(http.StatusNoContent)
+	})
+	handler := New(Config{BaseURL: "http://localhost:8080", Version: "1.0.0"}, Dependencies{
+		Logger:          zap.NewNop(),
+		Instrumenter:    identityInstrumenter{},
+		Readiness:       appRuntime.NewReadiness(),
+		Stats:           &dashboard.Stats{},
+		ObserverFactory: tokenusage.NewObserver,
+		OpenAIProxy:     http.NotFoundHandler(),
+		AnthropicProxy:  http.NotFoundHandler(),
+		ControlPlane:    controlPlane,
+		ControlAuth:     exactTokenAuthorizer("management-token"),
+	})
+
+	unauthorized := httptest.NewRecorder()
+	handler.ServeHTTP(unauthorized, httptest.NewRequest(http.MethodGet, "/v1/organizations", nil))
+	if unauthorized.Code != http.StatusUnauthorized || controlCalls != 0 {
+		t.Fatalf("unauthorized response=%d calls=%d", unauthorized.Code, controlCalls)
+	}
+
+	authorizedRequest := httptest.NewRequest(http.MethodGet, "/v1/organizations", nil)
+	authorizedRequest.Header.Set("Authorization", "Bearer management-token")
+	authorized := httptest.NewRecorder()
+	handler.ServeHTTP(authorized, authorizedRequest)
+	if authorized.Code != http.StatusNoContent || controlCalls != 1 || authorized.Header().Get("x-request-id") == "" {
+		t.Fatalf("authorized response=%d calls=%d request_id=%q", authorized.Code, controlCalls, authorized.Header().Get("x-request-id"))
+	}
+
+	unknown := httptest.NewRecorder()
+	handler.ServeHTTP(unknown, httptest.NewRequest(http.MethodGet, "/v1/not-a-control-resource", nil))
+	if unknown.Code != http.StatusOK || !strings.Contains(unknown.Body.String(), "LLM 代理控制台") {
+		t.Fatalf("unknown response=%d body=%s", unknown.Code, unknown.Body.String())
+	}
+}
+
+type exactTokenAuthorizer string
+
+func (a exactTokenAuthorizer) Authorize(token string) bool { return token == string(a) }

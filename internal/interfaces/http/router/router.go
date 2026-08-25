@@ -3,7 +3,9 @@ package router
 import (
 	"net/http"
 
+	controlport "github.com/goairix/llm-proxy/internal/application/controlplane/port"
 	appRuntime "github.com/goairix/llm-proxy/internal/application/runtime"
+	"github.com/goairix/llm-proxy/internal/interfaces/http/handler/controlplane"
 	"github.com/goairix/llm-proxy/internal/interfaces/http/handler/dashboard"
 	"github.com/goairix/llm-proxy/internal/interfaces/http/handler/health"
 	"github.com/goairix/llm-proxy/internal/interfaces/http/middleware"
@@ -32,6 +34,8 @@ type Dependencies struct {
 	ObserverFactory appRuntime.UsageObserverFactory
 	OpenAIProxy     http.Handler
 	AnthropicProxy  http.Handler
+	ControlPlane    http.Handler
+	ControlAuth     controlport.ControlPlaneAuthorizer
 }
 
 // New builds the HTTP routing tree without owning the server lifecycle.
@@ -54,6 +58,16 @@ func New(cfg Config, deps Dependencies) http.Handler {
 	))
 	mux.Handle("/openai/", deps.Instrumenter.WrapHandler("openai", openAI))
 	mux.Handle("/anthropic/", deps.Instrumenter.WrapHandler("anthropic", anthropic))
+	if deps.ControlPlane != nil {
+		controlHandler := middleware.RequestID(
+			middleware.ControlPlaneLogging(deps.Logger)(
+				middleware.ControlPlaneAuth(deps.ControlAuth)(deps.ControlPlane),
+			),
+		)
+		for _, pattern := range controlplane.ResourcePatterns {
+			mux.Handle(pattern, controlHandler)
+		}
+	}
 	return mux
 }
 
