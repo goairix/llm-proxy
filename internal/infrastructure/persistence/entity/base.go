@@ -10,7 +10,7 @@ import (
 // BaseEntity is the UUIDv7 and audit-time shape shared by persisted resources.
 // UUIDs are generated in Go before persistence; the database has no UUID default.
 type BaseEntity struct {
-	ID        uuid.UUID `gorm:"type:uuid;primaryKey;not null"`
-	CreatedAt time.Time `gorm:"type:timestamptz;not null"`
-	UpdatedAt time.Time `gorm:"type:timestamptz;not null"`
+	ID        uuid.UUID `gorm:"type:uuid;not null;default:uuid_generate_v7();primary_key"`
+	CreatedAt time.Time `gorm:"type:timestamp(0) without time zone;index;not null"`
+	UpdatedAt time.Time `gorm:"type:timestamp(0) without time zone;not null"`
 }

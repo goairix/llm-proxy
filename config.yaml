@@ -158,7 +158,8 @@ gateway:
 database:
   driver: postgres
 
-  # 统一网关启用时必填。请通过环境变量或 .env 注入真实连接串。
+  # 统一网关启用时必填。连接必须指定 TimeZone=Asia/Shanghai。
+  # 请通过环境变量或 .env 注入真实连接串。
   dsn: ""
 
   max_idle_connections: 5

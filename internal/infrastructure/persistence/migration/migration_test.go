@@ -66,8 +66,16 @@ func TestPostgresInitialMigration(t *testing.T) {
 		t.Fatalf("base revision = %+v; want UUIDv7 revision 0", revision)
 	}
 	assertModelColumnType(t, db, &entity.Organization{}, "id", "uuid")
+	assertModelColumnType(t, db, &entity.Organization{}, "created_at", "timestamp without time zone")
 	assertModelColumnType(t, db, &entity.VirtualKey{}, "hash", "bytea")
 	assertModelColumnType(t, db, &entity.Deployment{}, "capabilities", "text")
+	var idDefault string
+	if err := db.Raw(`SELECT column_default FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'organizations' AND column_name = 'id'`).Scan(&idDefault).Error; err != nil {
+		t.Fatalf("read id default: %v", err)
+	}
+	if !strings.Contains(idDefault, "uuid_generate_v7") {
+		t.Fatalf("organization id default = %q; want uuid_generate_v7", idDefault)
+	}
 	var foreignKeyCount int64
 	if err := db.Raw(`SELECT COUNT(*) FROM information_schema.table_constraints WHERE constraint_schema = current_schema() AND constraint_type = 'FOREIGN KEY'`).Scan(&foreignKeyCount).Error; err != nil {
 		t.Fatalf("count foreign keys: %v", err)

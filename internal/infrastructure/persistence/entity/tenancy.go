@@ -31,7 +31,7 @@ type VirtualKey struct {
 	Prefix    string     `gorm:"type:varchar(64);not null"`
 	LastFour  string     `gorm:"type:char(4);not null"`
 	Status    string     `gorm:"type:varchar(32);not null;index:idx_virtual_keys_status"`
-	ExpiresAt *time.Time `gorm:"type:timestamptz;index:idx_virtual_keys_expires_at"`
+	ExpiresAt *time.Time `gorm:"type:timestamp(0) without time zone;index:idx_virtual_keys_expires_at"`
 }
 
 func (VirtualKey) TableName() string { return "virtual_keys" }

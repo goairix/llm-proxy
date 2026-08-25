@@ -479,13 +479,13 @@ func (r *Runtime) Close() error
 
 ```go
 type BaseEntity struct {
-	ID        uuid.UUID `gorm:"type:uuid;primaryKey;not null"`
-	CreatedAt time.Time `gorm:"type:timestamptz;not null"`
-	UpdatedAt time.Time `gorm:"type:timestamptz;not null"`
+	ID        uuid.UUID `gorm:"type:uuid;not null;default:uuid_generate_v7();primary_key"`
+	CreatedAt time.Time `gorm:"type:timestamp(0) without time zone;index;not null"`
+	UpdatedAt time.Time `gorm:"type:timestamp(0) without time zone;not null"`
 }
 ```
 
-Tenancy/Catalog Entity 使用原生 `uuid.UUID` 保存逻辑关联 ID。能力 JSON 保存到 `text`；哈希、nonce、密文和包装数据密钥使用 `bytea`。每个 Entity 显式实现稳定复数表名。不要添加数据库 UUID 默认值。禁止声明 GORM Relationship、Association 或 `constraint`，迁移不得创建任何数据库外键；跨资源关联完整性全部由 Application Service 在事务内校验。
+Tenancy/Catalog Entity 使用原生 `uuid.UUID` 保存逻辑关联 ID。能力 JSON 保存到 `text`；哈希、nonce、密文和包装数据密钥使用 `bytea`。每个 Entity 显式实现稳定复数表名。正常代码必须显式写入 UUIDv7；数据库 `uuid_generate_v7()` 默认值只服务手工 SQL。所有时间字段使用 `timestamp(0) without time zone`，连接指定 `TimeZone=Asia/Shanghai`。禁止声明 GORM Relationship、Association 或 `constraint`，迁移不得创建任何数据库外键；跨资源关联完整性全部由 Application Service 在事务内校验。
 
 - [ ] **步骤 4：实现事务管理器**
 
@@ -504,7 +504,7 @@ type Manager interface {
 
 迁移 ID 使用 `2026082501_initial_control_plane`。Up 顺序创建 organizations、projects、virtual_keys、providers、provider_credentials、deployments、model_aliases、route_targets、config_revisions；Down 仅按反向依赖顺序删除这些表。Up 最后创建一条 UUIDv7 的 revision=0 基础记录。
 
-禁止使用 `uuid_generate_v7()`、`jsonb`、数组、数据库外键或手写 PostgreSQL 专属查询。普通索引至少覆盖父级列表、VirtualKey 哈希唯一索引、Project 内 Alias 名称唯一索引和 RouteTarget 逻辑关联 ID。
+除 `BaseEntity.ID` 的手工插入兜底默认值外，业务代码禁止依赖 `uuid_generate_v7()`；同时禁止使用 `jsonb`、数组、数据库外键或手写 PostgreSQL 专属查询。普通索引至少覆盖父级列表、VirtualKey 哈希唯一索引、Project 内 Alias 名称唯一索引和 RouteTarget 逻辑关联 ID。
 
 - [ ] **步骤 6：实现迁移 CLI**
 

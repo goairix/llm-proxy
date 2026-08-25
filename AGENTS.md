@@ -91,6 +91,8 @@ docker build -t llm-proxy .
 
 ### 数据库与关联完整性
 
+- 所有业务代码必须在构造领域实体时生成 UUIDv7 并显式写入数据库；`BaseEntity.ID` 保留 `uuid_generate_v7()` 数据库默认值，仅作为手工 SQL 插入时的兜底，正常代码不得依赖该默认值。
+- 审计时间和业务时间统一保存为 `timestamp(0) without time zone`；PostgreSQL 连接信息必须指定 `TimeZone=Asia/Shanghai`，避免不同会话以不同时区解释无时区时间。
 - 数据库禁止创建或依赖外键约束；迁移、GORM Entity、索引定义和手写 SQL 均不得包含 `FOREIGN KEY`、`REFERENCES` 或 GORM `constraint`/关联声明。
 - 资源之间仍使用 UUID 字段保存逻辑关联，并为常用关联查询建立普通索引；数据库只负责字段类型、非空、唯一性等单表约束。
 - 父资源存在性、租户归属、作用域匹配、引用状态和停用保护必须由 Application Service 在同一事务内显式读取并校验，不能依赖数据库级联或外键错误兜底。

@@ -141,13 +141,13 @@ Project 可见的逻辑模型名称。数据面请求中的 `model` 始终先在
 - 所有领域实体主键和逻辑关联 ID 均使用 `github.com/google/uuid.UUID`。
 - 所有新业务 ID 必须由领域构造器调用 `uuid.NewV7()` 生成。
 - PostgreSQL 使用原生 `uuid` 列保存主键和逻辑关联 ID，不保存 UUID 字符串。
-- 不使用 `uuid_generate_v7()` 数据库默认值，避免依赖 PostgreSQL 扩展并消除双重生成来源。
+- 所有正常代码路径必须由领域构造器生成 UUIDv7 并显式写入。数据库列保留 `uuid_generate_v7()` 默认值，仅用于手工 SQL 插入兜底；运行环境必须提供该函数，业务代码不得依赖数据库生成主键。
 - 所有创建入口，包括迁移、测试夹具和内部引导，都必须显式生成 UUIDv7。
 - 持久化 Entity 统一嵌入 `BaseEntity`，字段为 `ID`、`CreatedAt`、`UpdatedAt`。
 - 领域模型不嵌入 GORM 标签；Repository 负责领域模型与持久化 Entity 的双向转换。
 - 当前 PostgreSQL 方言把逻辑 UUID 映射为原生 `uuid`。未来 MySQL、SQLite Adapter 负责映射到各自的等价二进制或 UUID 类型，领域接口不变。
 
-时间统一使用 UTC。API 输出 RFC 3339 时间，数据库字段不承担业务时区转换。
+数据库时间字段统一使用 `timestamp(0) without time zone`，PostgreSQL 连接统一指定 `TimeZone=Asia/Shanghai`。API 仍输出 RFC 3339 时间；代码读写时间时必须遵循同一连接时区约定，不能依赖数据库字段携带时区信息。
 
 ## 7. 仓储、事务与数据库可替换性
 
