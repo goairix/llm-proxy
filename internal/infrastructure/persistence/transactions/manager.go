@@ -2,6 +2,7 @@ package transactions
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 
@@ -15,6 +16,33 @@ import (
 // DBProvider supplies the current GORM connection or a stable availability error.
 type DBProvider interface {
 	DB(context.Context) (*gorm.DB, error)
+}
+
+// ReadOnlySnapshot runs a callback in one repeatable-read, read-only transaction.
+func (m *Manager) ReadOnlySnapshot(ctx context.Context, fn func(context.Context) error) error {
+	if _, ok := transactionFromContext(ctx); ok {
+		return fn(ctx)
+	}
+	db, err := m.provider.DB(ctx)
+	if err != nil {
+		return err
+	}
+	tx := db.WithContext(ctx).Begin(&sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true})
+	if tx.Error != nil {
+		return tx.Error
+	}
+	completed := false
+	defer func() {
+		if !completed {
+			_ = tx.Rollback().Error
+		}
+	}()
+	if err := fn(context.WithValue(ctx, transactionContextKey{}, tx)); err != nil {
+		return err
+	}
+	commitErr := tx.Commit().Error
+	completed = true
+	return commitErr
 }
 
 // DBManager is the internal persistence contract used by repository adapters.

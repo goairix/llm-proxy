@@ -309,6 +309,10 @@ func (m *testTransactions) Transaction(ctx context.Context, fn func(context.Cont
 	return fn(context.WithValue(ctx, transactionMarker{}, true))
 }
 
+func (m *testTransactions) ReadOnlySnapshot(ctx context.Context, fn func(context.Context) error) error {
+	return m.Transaction(ctx, fn)
+}
+
 type rollbackTransactions struct {
 	organizations *organizationRepo
 	revisions     *revisionRepo
@@ -327,6 +331,10 @@ func (m *rollbackTransactions) Transaction(ctx context.Context, fn func(context.
 		return err
 	}
 	return nil
+}
+
+func (m *rollbackTransactions) ReadOnlySnapshot(ctx context.Context, fn func(context.Context) error) error {
+	return m.Transaction(ctx, fn)
 }
 
 type organizationRepo struct {

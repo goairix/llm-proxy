@@ -114,6 +114,51 @@ func TestManagerMapsCommitFailureAfterDatabaseWasPublished(t *testing.T) {
 	}
 }
 
+func TestReadOnlySnapshotReusesTransactionContextAndOptions(t *testing.T) {
+	state := &transactionState{}
+	manager := NewManager(staticProvider{db: newTransactionTestGORM(t, state)})
+
+	err := manager.ReadOnlySnapshot(context.Background(), func(ctx context.Context) error {
+		first, err := manager.DB(ctx)
+		if err != nil {
+			return err
+		}
+		second, err := manager.DB(ctx)
+		if err != nil {
+			return err
+		}
+		if first != second {
+			t.Fatal("transaction handle was not reused")
+		}
+		return manager.ReadOnlySnapshot(ctx, func(nested context.Context) error {
+			nestedDB, err := manager.DB(nested)
+			if err != nil {
+				return err
+			}
+			if nestedDB != first {
+				t.Fatal("nested snapshot did not reuse transaction")
+			}
+			return nil
+		})
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.begins.Load() != 1 || state.commits.Load() != 1 || !state.readOnly.Load() || state.isolation.Load() != int32(driver.IsolationLevel(sql.LevelRepeatableRead)) {
+		t.Fatalf("state = begins:%d commits:%d read_only:%v isolation:%d", state.begins.Load(), state.commits.Load(), state.readOnly.Load(), state.isolation.Load())
+	}
+}
+
+func TestReadOnlySnapshotPropagatesDatabaseUnavailable(t *testing.T) {
+	manager := NewManager(staticProvider{err: database.ErrUnavailable})
+
+	err := manager.ReadOnlySnapshot(context.Background(), func(context.Context) error { return nil })
+
+	if !errors.Is(err, database.ErrUnavailable) {
+		t.Fatalf("ReadOnlySnapshot() error = %v; want database.ErrUnavailable", err)
+	}
+}
+
 type staticProvider struct {
 	db  *gorm.DB
 	err error
@@ -136,6 +181,8 @@ type transactionState struct {
 	begins    atomic.Int32
 	commits   atomic.Int32
 	rollbacks atomic.Int32
+	readOnly  atomic.Bool
+	isolation atomic.Int32
 }
 
 type transactionConnector struct{ state *transactionState }
@@ -161,7 +208,10 @@ func (c *transactionConn) Begin() (driver.Tx, error) {
 	c.state.begins.Add(1)
 	return &transactionTx{state: c.state}, nil
 }
-func (c *transactionConn) BeginTx(context.Context, driver.TxOptions) (driver.Tx, error) {
+
+func (c *transactionConn) BeginTx(_ context.Context, options driver.TxOptions) (driver.Tx, error) {
+	c.state.readOnly.Store(options.ReadOnly)
+	c.state.isolation.Store(int32(options.Isolation))
 	return c.Begin()
 }
 
