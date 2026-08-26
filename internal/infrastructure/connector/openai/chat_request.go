@@ -161,9 +161,14 @@ func encodeChatMessages(message inference.Message) ([]chatRequestMessage, error)
 				return nil, err
 			}
 			results = append(results, chatRequestMessage{Role: "tool", ToolCallID: block.ToolResult.ToolCallID, Content: content})
+		default:
+			return nil, parameterUnsupported("messages", fmt.Errorf("Chat Completions does not support content type %q in a request", block.Type))
 		}
 	}
 	if len(results) > 0 {
+		if len(parts) > 0 || len(regular.ToolCalls) > 0 {
+			return nil, parameterUnsupported("messages", fmt.Errorf("tool results cannot share a Chat Completions message with other content"))
+		}
 		return results, nil
 	}
 	if len(parts) == 1 && parts[0].Type == "text" {
