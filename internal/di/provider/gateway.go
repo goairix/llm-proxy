@@ -5,6 +5,7 @@ import (
 
 	gatewayport "github.com/goairix/llm-proxy/internal/application/gateway/port"
 	gatewayservice "github.com/goairix/llm-proxy/internal/application/gateway/service"
+	gatewaysnapshot "github.com/goairix/llm-proxy/internal/application/gateway/snapshot"
 	"github.com/goairix/llm-proxy/internal/infrastructure/config"
 	fakeconnector "github.com/goairix/llm-proxy/internal/infrastructure/connector/fake"
 	gatewayhandler "github.com/goairix/llm-proxy/internal/interfaces/http/handler/gateway"
@@ -25,7 +26,7 @@ func NewUnifiedGatewayHandlers(cfg *config.Config, runtime *GatewayRuntime) *Uni
 	registry := staticConnectorRegistry{
 		"fake": fakeconnector.New(fakeconnector.Options{}),
 	}
-	gateway := gatewayservice.New(runtime.Store(), registry)
+	gateway := gatewayservice.New(runtime.Store(), registry, gatewaysnapshot.NewCredentialSelector())
 	handlers.OpenAI = gatewayhandler.NewOpenAI(gateway)
 	handlers.Anthropic = gatewayhandler.NewAnthropic(gateway)
 	return handlers

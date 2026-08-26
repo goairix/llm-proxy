@@ -126,14 +126,9 @@ func (c *Compiler) Compile(source SourceConfig, now time.Time) (*RuntimeSnapshot
 		allDeployments[deployment.ID] = deployment
 		_, providerActive := activeProviders[deployment.ProviderID]
 		if deployment.Status == sharedmodel.StatusActive && providerActive && scopeActive(deployment.Scope, activeOrganizations, activeProjects) {
-			connectorType := ""
-			if provider.ConnectorType == catalogmodel.ConnectorFake {
-				connectorType = provider.ConnectorType
-			}
 			activeDeployments[deployment.ID] = Deployment{
 				ID: deployment.ID, ProviderID: deployment.ProviderID, UpstreamModel: deployment.UpstreamModel,
 				UpstreamProtocol: deployment.UpstreamProtocol, Capabilities: deployment.Capabilities,
-				ConnectorType: connectorType, Credential: nil,
 			}
 		}
 	}

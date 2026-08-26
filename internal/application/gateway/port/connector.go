@@ -11,7 +11,9 @@ import (
 type Invocation struct {
 	Request    inference.Request
 	Access     gatewaysnapshot.AccessContext
+	Provider   gatewaysnapshot.Provider
 	Deployment gatewaysnapshot.Deployment
+	Credential *gatewaysnapshot.CredentialEnvelope
 	Revision   int64
 }
 

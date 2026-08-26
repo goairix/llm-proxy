@@ -51,10 +51,6 @@ type Deployment struct {
 	UpstreamModel    string
 	UpstreamProtocol catalogmodel.UpstreamProtocol
 	Capabilities     catalogmodel.CapabilitySet
-	// ConnectorType and Credential are temporary compatibility fields for the
-	// pre-provider-aware Gateway. Compiler only populates ConnectorType for Fake.
-	ConnectorType string
-	Credential    *CredentialEnvelope
 }
 
 type RoutePlan struct {
@@ -88,13 +84,7 @@ func (s *RuntimeSnapshot) BuiltAt() time.Time {
 }
 
 func cloneRoutePlan(plan RoutePlan) RoutePlan {
-	result := plan
-	if plan.Deployment.Credential != nil {
-		credential := *plan.Deployment.Credential
-		credential.Sealed = cloneSealedCredential(credential.Sealed)
-		result.Deployment.Credential = &credential
-	}
-	return result
+	return plan
 }
 
 func cloneSealedCredential(sealed catalogmodel.SealedCredential) catalogmodel.SealedCredential {

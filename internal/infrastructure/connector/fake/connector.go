@@ -89,8 +89,8 @@ func (c *Connector) buildResponse(invocation gatewayport.Invocation) (inference.
 	if err := invocation.Request.Validate(); err != nil {
 		return inference.Response{}, fmt.Errorf("validate fake invocation: %w", err)
 	}
-	if invocation.Deployment.ConnectorType != "fake" {
-		return inference.Response{}, fmt.Errorf("fake connector received deployment type %q", invocation.Deployment.ConnectorType)
+	if invocation.Provider.ConnectorType != "fake" {
+		return inference.Response{}, fmt.Errorf("fake connector received provider type %q", invocation.Provider.ConnectorType)
 	}
 	responseID, err := c.nextID()
 	if err != nil {

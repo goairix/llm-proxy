@@ -27,11 +27,12 @@ type snapshotStore interface {
 type gateway struct {
 	store    snapshotStore
 	registry gatewayport.ConnectorRegistry
+	selector *gatewaysnapshot.CredentialSelector
 	clock    func() time.Time
 }
 
-func New(store snapshotStore, registry gatewayport.ConnectorRegistry) Gateway {
-	return &gateway{store: store, registry: registry, clock: func() time.Time { return time.Now().UTC() }}
+func New(store snapshotStore, registry gatewayport.ConnectorRegistry, selector *gatewaysnapshot.CredentialSelector) Gateway {
+	return &gateway{store: store, registry: registry, selector: selector, clock: func() time.Time { return time.Now().UTC() }}
 }
 
 func (g *gateway) Complete(ctx context.Context, virtualKey string, request inference.Request) (inference.Response, error) {
@@ -44,7 +45,7 @@ func (g *gateway) Complete(ctx context.Context, virtualKey string, request infer
 	}
 	response, err := connector.Complete(ctx, invocation)
 	if err != nil {
-		return inference.Response{}, NewError(ConnectorFailed, "供应商请求失败", "", err)
+		return inference.Response{}, mapConnectorError(err, "供应商请求失败")
 	}
 	if err := response.Validate(); err != nil {
 		return inference.Response{}, NewError(ConnectorFailed, "供应商返回了无效响应", "", err)
@@ -65,7 +66,7 @@ func (g *gateway) Stream(ctx context.Context, virtualKey string, request inferen
 	}
 	stream, err := connector.Stream(ctx, invocation)
 	if err != nil {
-		return nil, NewError(ConnectorFailed, "供应商流式请求失败", "", err)
+		return nil, mapConnectorError(err, "供应商流式请求失败")
 	}
 	if stream == nil {
 		return nil, NewError(ConnectorFailed, "供应商流式请求失败", "", fmt.Errorf("connector returned nil stream"))
@@ -96,15 +97,34 @@ func (g *gateway) prepare(virtualKey string, request inference.Request) (gateway
 	if param := unsupportedCapability(request.RequiredCapabilities(), plan.Deployment.Capabilities); param != "" {
 		return gatewayport.Invocation{}, nil, NewError(CapabilityUnsupported, "当前模型不支持请求所需能力", param, nil)
 	}
+	provider, err := session.Provider(plan.Deployment.ProviderID)
+	if err != nil {
+		return gatewayport.Invocation{}, nil, mapSnapshotError(err)
+	}
+	var credential *gatewaysnapshot.CredentialEnvelope
+	if provider.ConnectorType != catalogmodel.ConnectorFake {
+		if g.selector == nil {
+			return gatewayport.Invocation{}, nil, NewError(InternalError, "网关连接器配置无效", "", fmt.Errorf("credential selector is nil"))
+		}
+		selected, selectErr := g.selector.Select(session, access, provider.ID)
+		if selectErr != nil {
+			if errors.Is(selectErr, gatewaysnapshot.ErrCredentialUnavailable) {
+				return gatewayport.Invocation{}, nil, NewError(ConnectorFailed, "供应商凭据不可用", "", selectErr)
+			}
+			return gatewayport.Invocation{}, nil, mapSnapshotError(selectErr)
+		}
+		credential = &selected
+	}
 	if g.registry == nil {
 		return gatewayport.Invocation{}, nil, NewError(InternalError, "网关连接器配置无效", "", fmt.Errorf("connector registry is nil"))
 	}
-	connector, ok := g.registry.Find(plan.Deployment.ConnectorType)
+	connector, ok := g.registry.Find(provider.ConnectorType)
 	if !ok || connector == nil {
 		return gatewayport.Invocation{}, nil, NewError(InternalError, "网关连接器配置无效", "", fmt.Errorf("connector type is not registered"))
 	}
 	return gatewayport.Invocation{
-		Request: request, Access: access, Deployment: plan.Deployment, Revision: session.Revision(),
+		Request: request, Access: access, Provider: provider, Deployment: plan.Deployment,
+		Credential: credential, Revision: session.Revision(),
 	}, connector, nil
 }
 
@@ -132,6 +152,14 @@ func mapSnapshotError(err error) error {
 	default:
 		return NewError(InternalError, "内部服务错误", "", err)
 	}
+}
+
+func mapConnectorError(err error, safeMessage string) error {
+	var connectorError *gatewayport.ConnectorError
+	if errors.As(err, &connectorError) && connectorError.Kind == gatewayport.ParameterUnsupported {
+		return NewError(CapabilityUnsupported, "当前模型不支持请求参数", connectorError.Param, err)
+	}
+	return NewError(ConnectorFailed, safeMessage, "", err)
 }
 
 func unsupportedCapability(required inference.Requirements, available catalogmodel.CapabilitySet) string {
@@ -172,7 +200,7 @@ func (s *validatedStream) Recv(ctx context.Context) (inference.Event, error) {
 			return inference.Event{}, io.EOF
 		}
 		_ = s.Close()
-		return inference.Event{}, NewError(ConnectorFailed, "供应商流式响应失败", "", err)
+		return inference.Event{}, mapConnectorError(err, "供应商流式响应失败")
 	}
 	if err := s.validator.Push(event); err != nil {
 		return inference.Event{}, s.fail(err)

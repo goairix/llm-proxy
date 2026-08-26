@@ -97,7 +97,7 @@ func TestUnifiedGatewaySSEFlushesThroughFullRouter(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			release := make(chan struct{})
 			connector := &blockingConnector{delegate: fakeconnector.New(fakeconnector.Options{}), release: release}
-			gateway := gatewayservice.New(store, integrationRegistry{"fake": connector})
+			gateway := gatewayservice.New(store, integrationRegistry{"fake": connector}, gatewaysnapshot.NewCredentialSelector())
 			root := unifiedGatewayTestRouter(gateway)
 			server := httptest.NewServer(root)
 			defer server.Close()
@@ -135,7 +135,7 @@ func TestConnectorInvocationNeverContainsRawVirtualKey(t *testing.T) {
 	compiledServer, virtualKey, store := newCompiledGatewayServer(t)
 	compiledServer.Close()
 	capture := &capturingConnector{delegate: fakeconnector.New(fakeconnector.Options{}), invocations: make(chan gatewayport.Invocation, 1)}
-	gateway := gatewayservice.New(store, integrationRegistry{"fake": capture})
+	gateway := gatewayservice.New(store, integrationRegistry{"fake": capture}, gatewaysnapshot.NewCredentialSelector())
 	server := httptest.NewServer(gatewayhandler.NewOpenAI(gateway))
 	defer server.Close()
 	response := gatewayRequest(t, server.Client(), server.URL, virtualKey,
@@ -217,7 +217,7 @@ func newCompiledGatewayServerWithCapabilities(t *testing.T, capabilities catalog
 	}
 	store := gatewaysnapshot.NewStore()
 	store.Publish(compiled)
-	gateway := gatewayservice.New(store, integrationRegistry{"fake": fakeconnector.New(fakeconnector.Options{})})
+	gateway := gatewayservice.New(store, integrationRegistry{"fake": fakeconnector.New(fakeconnector.Options{})}, gatewaysnapshot.NewCredentialSelector())
 	mux := http.NewServeMux()
 	mux.Handle("/v1/chat/completions", gatewayhandler.NewOpenAI(gateway))
 	mux.Handle("/v1/messages", gatewayhandler.NewAnthropic(gateway))
@@ -689,7 +689,7 @@ func assertStreamErrorUsesProtocolEnvelope(t *testing.T, store *gatewaysnapshot.
 	t.Helper()
 	gateway := gatewayservice.New(store, integrationRegistry{
 		"fake": fakeconnector.New(fakeconnector.Options{StreamErrorAfter: 1, StreamErrorMessage: "safe stream failure"}),
-	})
+	}, gatewaysnapshot.NewCredentialSelector())
 	openAI := httptest.NewServer(gatewayhandler.NewOpenAI(gateway))
 	defer openAI.Close()
 	response := gatewayRequest(t, openAI.Client(), openAI.URL, virtualKey,

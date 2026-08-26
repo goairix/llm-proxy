@@ -487,9 +487,10 @@ func collectEvents(t *testing.T, stream interface {
 
 func validInvocation() gatewayport.Invocation {
 	return gatewayport.Invocation{
-		Request: validRequest(),
+		Request:  validRequest(),
+		Provider: gatewaysnapshot.Provider{ID: uuid.Must(uuid.NewV7()), ConnectorType: "fake"},
 		Deployment: gatewaysnapshot.Deployment{
-			ID: uuid.Must(uuid.NewV7()), ConnectorType: "fake", UpstreamModel: "fake-model",
+			ID: uuid.Must(uuid.NewV7()), UpstreamModel: "fake-model",
 		},
 		Revision: 7,
 	}
@@ -534,7 +535,7 @@ func fixedIDs(ids ...uuid.UUID) func() (uuid.UUID, error) {
 func TestFakeOutputDoesNotContainCredentialOrVirtualKey(t *testing.T) {
 	connector := New(Options{IDGenerator: fixedIDs(uuid.Must(uuid.NewV7())), Clock: func() time.Time { return fakeNow }})
 	invocation := validInvocation()
-	invocation.Deployment.Credential = &gatewaysnapshot.CredentialEnvelope{Sealed: catalogSealedFixture()}
+	invocation.Credential = &gatewaysnapshot.CredentialEnvelope{Sealed: catalogSealedFixture()}
 	response, err := connector.Complete(context.Background(), invocation)
 	if err != nil {
 		t.Fatal(err)

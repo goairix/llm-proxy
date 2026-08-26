@@ -8,8 +8,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-
-	catalogmodel "github.com/goairix/llm-proxy/internal/domain/catalog/model"
 )
 
 func TestAuthenticatorAcceptsValidVirtualKey(t *testing.T) {
@@ -70,21 +68,12 @@ func TestAuthenticatorRejectsInvalidVirtualKeysWithoutLeakingToken(t *testing.T)
 func TestSessionResolveReturnsDeepCopy(t *testing.T) {
 	projectID := uuid.Must(uuid.NewV7())
 	key := RouteKey{ProjectID: projectID, Model: "assistant"}
-	wantCiphertext := byte(4)
 	snapshot := newSnapshotForTest(9)
 	snapshot.routes[key] = RoutePlan{
 		AliasID: uuid.Must(uuid.NewV7()),
 		Alias:   "assistant",
 		Deployment: Deployment{
-			ID:            uuid.Must(uuid.NewV7()),
-			ConnectorType: "openai",
-			Credential: &CredentialEnvelope{
-				CredentialID: uuid.Must(uuid.NewV7()),
-				Sealed: catalogmodel.SealedCredential{
-					KeyVersion: "v1", WrappedKeyNonce: []byte{1}, WrappedDataKey: []byte{2},
-					PayloadNonce: []byte{3}, Ciphertext: []byte{wantCiphertext},
-				},
-			},
+			ID: uuid.Must(uuid.NewV7()), UpstreamModel: "gpt-5",
 		},
 	}
 	store := NewStore()
@@ -98,12 +87,13 @@ func TestSessionResolveReturnsDeepCopy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	first.Deployment.Credential.Sealed.Ciphertext[0] = 99
+	first.Alias = "modified"
+	first.Deployment.UpstreamModel = "modified"
 	second, err := session.Resolve(projectID, "assistant")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if second.Deployment.Credential.Sealed.Ciphertext[0] != wantCiphertext {
+	if second.Alias != "assistant" || second.Deployment.UpstreamModel != "gpt-5" {
 		t.Fatal("resolved route plan modified the published snapshot")
 	}
 }
