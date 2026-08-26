@@ -15,9 +15,14 @@ const (
 	ContentImage      ContentType = "image"
 	ContentToolCall   ContentType = "tool_call"
 	ContentToolResult ContentType = "tool_result"
+	ContentRefusal    ContentType = "refusal"
 )
 
 type TextContent struct {
+	Text string
+}
+
+type RefusalContent struct {
 	Text string
 }
 
@@ -59,11 +64,12 @@ type ContentBlock struct {
 	Image      *ImageContent
 	ToolCall   *ToolCallContent
 	ToolResult *ToolResultContent
+	Refusal    *RefusalContent
 }
 
 func (b ContentBlock) Validate() error {
 	payloads := 0
-	for _, present := range []bool{b.Text != nil, b.Image != nil, b.ToolCall != nil, b.ToolResult != nil} {
+	for _, present := range []bool{b.Text != nil, b.Image != nil, b.ToolCall != nil, b.ToolResult != nil, b.Refusal != nil} {
 		if present {
 			payloads++
 		}
@@ -114,6 +120,13 @@ func (b ContentBlock) Validate() error {
 		}
 		if hasJSON && !json.Valid(b.ToolResult.JSON) {
 			return fmt.Errorf("tool result JSON is invalid")
+		}
+	case ContentRefusal:
+		if b.Refusal == nil {
+			return fmt.Errorf("refusal content payload is required")
+		}
+		if strings.TrimSpace(b.Refusal.Text) == "" {
+			return fmt.Errorf("refusal content must not be empty")
 		}
 	default:
 		return fmt.Errorf("unsupported content type %q", b.Type)

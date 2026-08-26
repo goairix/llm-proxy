@@ -544,6 +544,27 @@ func TestFakeOutputDoesNotContainCredentialOrVirtualKey(t *testing.T) {
 	}
 }
 
+func TestResponseEventsEmitRefusalDeltas(t *testing.T) {
+	response := inference.Response{
+		ID: uuid.Must(uuid.NewV7()), Model: "assistant", CreatedAt: fakeNow,
+		Content:    []inference.ContentBlock{{Type: inference.ContentRefusal, Refusal: &inference.RefusalContent{Text: "无法协助"}}},
+		StopReason: inference.StopContentFilter,
+	}
+	events := responseEvents(response, 2)
+	if err := inference.ValidateEventSequence(events); err != nil {
+		t.Fatal(err)
+	}
+	var deltas []string
+	for _, event := range events {
+		if event.Type == inference.EventRefusalDelta {
+			deltas = append(deltas, event.RefusalDelta.Text)
+		}
+	}
+	if strings.Join(deltas, "") != "无法协助" {
+		t.Fatalf("refusal deltas=%q events=%+v", deltas, events)
+	}
+}
+
 func catalogSealedFixture() catalogmodel.SealedCredential {
 	return catalogmodel.SealedCredential{
 		KeyVersion: "v1", WrappedKeyNonce: []byte{1}, WrappedDataKey: []byte{2}, PayloadNonce: []byte{3},

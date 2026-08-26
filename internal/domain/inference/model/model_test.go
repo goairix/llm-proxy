@@ -167,3 +167,16 @@ func TestResponseValidationAndUsageTotal(t *testing.T) {
 		t.Fatal("negative usage was accepted")
 	}
 }
+
+func TestResponseAcceptsRefusalContent(t *testing.T) {
+	response := Response{
+		ID:         uuid.Must(uuid.NewV7()),
+		Model:      "assistant",
+		Content:    []ContentBlock{{Type: ContentRefusal, Refusal: &RefusalContent{Text: "无法协助"}}},
+		StopReason: StopContentFilter,
+		CreatedAt:  time.Now().UTC(),
+	}
+	if err := response.Validate(); err != nil {
+		t.Fatal(err)
+	}
+}
