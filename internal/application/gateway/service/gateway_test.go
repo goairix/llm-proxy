@@ -281,9 +281,9 @@ func newGatewayFixture(t *testing.T, capabilities catalogmodel.CapabilitySet) *g
 	organization, _ := tenancymodel.NewOrganization("Acme")
 	project, _ := tenancymodel.NewProject(organization.ID, "Production")
 	key, _ := tenancymodel.NewVirtualKey(project.ID, "ci", sha256.Sum256([]byte(virtualKey)), "llmp_v1_gateway", "cret", nil)
-	provider, _ := catalogmodel.NewProvider("Fake", "fake")
+	provider, _ := catalogmodel.NewProvider("Fake", catalogmodel.ConnectorFake, "")
 	deployment, err := catalogmodel.NewDeployment(
-		provider.ID, nil, "fake", "fake-model", "fake", catalogmodel.Scope{Kind: catalogmodel.ScopePlatform}, capabilities,
+		provider.ID, "fake", "fake-model", catalogmodel.UpstreamFake, catalogmodel.Scope{Kind: catalogmodel.ScopePlatform}, capabilities,
 	)
 	if err != nil {
 		t.Fatal(err)

@@ -24,22 +24,13 @@ type Provider struct {
 	Status        sharedmodel.Status
 }
 
-// NewProvider creates an active provider definition.
-func NewProvider(name, connectorType string) (*Provider, error) {
-	return newProvider(name, connectorType, "", true)
-}
-
-// NewProviderWithBaseURL creates an active provider with explicit transport configuration.
-func NewProviderWithBaseURL(name, connectorType, baseURL string) (*Provider, error) {
-	return newProvider(name, connectorType, baseURL, false)
-}
-
-func newProvider(name, connectorType, baseURL string, legacy bool) (*Provider, error) {
+// NewProvider creates an active provider with its transport configuration.
+func NewProvider(name, connectorType, baseURL string) (*Provider, error) {
 	entity, err := sharedmodel.NewEntity()
 	if err != nil {
 		return nil, err
 	}
-	normalizedBaseURL, err := normalizeBaseURL(connectorType, baseURL, legacy)
+	normalizedBaseURL, err := normalizeBaseURL(connectorType, baseURL)
 	if err != nil {
 		return nil, err
 	}
@@ -73,16 +64,12 @@ func (p Provider) Validate() error {
 			return fmt.Errorf("%w: fake provider base URL must be empty", sharederrors.ErrInvalid)
 		}
 	case ConnectorOpenAI, ConnectorOpenAICompatible:
-		// Empty BaseURL remains valid only for legacy records until the persistence
-		// migration is complete. NewProviderWithBaseURL rejects it before creation.
-		if strings.TrimSpace(p.BaseURL) != "" {
-			normalized, err := normalizeBaseURL(p.ConnectorType, p.BaseURL, false)
-			if err != nil {
-				return err
-			}
-			if normalized != p.BaseURL {
-				return fmt.Errorf("%w: provider base URL must be normalized", sharederrors.ErrInvalid)
-			}
+		normalized, err := normalizeBaseURL(p.ConnectorType, p.BaseURL)
+		if err != nil {
+			return err
+		}
+		if normalized != p.BaseURL {
+			return fmt.Errorf("%w: provider base URL must be normalized", sharederrors.ErrInvalid)
 		}
 	default:
 		return fmt.Errorf("%w: unsupported provider connector type %q", sharederrors.ErrInvalid, p.ConnectorType)
@@ -110,7 +97,7 @@ func (p *Provider) SetBaseURL(value string) error {
 	if p == nil {
 		return fmt.Errorf("%w: provider is required", sharederrors.ErrInvalid)
 	}
-	normalized, err := normalizeBaseURL(p.ConnectorType, value, false)
+	normalized, err := normalizeBaseURL(p.ConnectorType, value)
 	if err != nil {
 		return err
 	}
@@ -118,16 +105,13 @@ func (p *Provider) SetBaseURL(value string) error {
 	return nil
 }
 
-func normalizeBaseURL(connectorType, value string, legacy bool) (string, error) {
+func normalizeBaseURL(connectorType, value string) (string, error) {
 	connectorType = strings.TrimSpace(connectorType)
 	value = strings.TrimSpace(value)
 	if connectorType == ConnectorFake {
 		if value != "" {
 			return "", fmt.Errorf("%w: fake provider base URL must be empty", sharederrors.ErrInvalid)
 		}
-		return "", nil
-	}
-	if value == "" && legacy {
 		return "", nil
 	}
 	if value == "" {

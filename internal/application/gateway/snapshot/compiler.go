@@ -117,9 +117,6 @@ func (c *Compiler) Compile(source SourceConfig, now time.Time) (*RuntimeSnapshot
 		if !exists {
 			return nil, compileMessage(source.Revision, "deployment", deployment.ID, "引用的 Provider 不存在")
 		}
-		if deployment.ConnectorType != "" && provider.ConnectorType != deployment.ConnectorType {
-			return nil, compileMessage(source.Revision, "deployment", deployment.ID, "Connector 类型与 Provider 不一致")
-		}
 		if !provider.Supports(deployment.UpstreamProtocol) {
 			return nil, compileMessage(source.Revision, "deployment", deployment.ID, "Provider 不支持 UpstreamProtocol")
 		}

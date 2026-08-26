@@ -185,12 +185,12 @@ func newCompiledGatewayServerWithCapabilities(t *testing.T, capabilities catalog
 	if err != nil {
 		t.Fatal(err)
 	}
-	providerResource, err := catalogmodel.NewProvider("Fake", "fake")
+	providerResource, err := catalogmodel.NewProvider("Fake", catalogmodel.ConnectorFake, "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	deployment, err := catalogmodel.NewDeployment(
-		providerResource.ID, nil, "fake-primary", "fake-model", "fake",
+		providerResource.ID, "fake-primary", "fake-model", catalogmodel.UpstreamFake,
 		catalogmodel.Scope{Kind: catalogmodel.ScopePlatform},
 		capabilities,
 	)

@@ -50,7 +50,7 @@ func TestCredentialMapperPreservesEncryptedBytes(t *testing.T) {
 
 func TestProviderAndDeploymentMappersPreserveConnectorConfiguration(t *testing.T) {
 	capabilities := catalogmodel.CapabilitySet{Text: true, Tools: true, Streaming: true}
-	provider, err := catalogmodel.NewProviderWithBaseURL("OpenAI", catalogmodel.ConnectorOpenAI, "https://api.openai.com/")
+	provider, err := catalogmodel.NewProvider("OpenAI", catalogmodel.ConnectorOpenAI, "https://api.openai.com/")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -61,7 +61,7 @@ func TestProviderAndDeploymentMappersPreserveConnectorConfiguration(t *testing.T
 	if mappedProvider.BaseURL != "https://api.openai.com" || mappedProvider.ConnectorType != catalogmodel.ConnectorOpenAI {
 		t.Fatalf("provider = %+v", mappedProvider)
 	}
-	deployment, err := catalogmodel.NewDeploymentWithProtocol(provider.ID, "responses", "gpt-5", catalogmodel.UpstreamResponses, catalogmodel.Scope{Kind: catalogmodel.ScopePlatform}, capabilities)
+	deployment, err := catalogmodel.NewDeployment(provider.ID, "responses", "gpt-5", catalogmodel.UpstreamResponses, catalogmodel.Scope{Kind: catalogmodel.ScopePlatform}, capabilities)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -79,7 +79,7 @@ func TestProviderAndDeploymentMappersPreserveConnectorConfiguration(t *testing.T
 }
 
 func TestProviderMapperRejectsInvalidPersistedBaseURL(t *testing.T) {
-	provider, err := catalogmodel.NewProviderWithBaseURL("OpenAI", catalogmodel.ConnectorOpenAI, "https://api.openai.com")
+	provider, err := catalogmodel.NewProvider("OpenAI", catalogmodel.ConnectorOpenAI, "https://api.openai.com")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,8 +103,8 @@ func TestCatalogRepositoriesWithPostgres(t *testing.T) {
 
 	organization, _ := tenantmodel.NewOrganization("Acme")
 	project, _ := tenantmodel.NewProject(organization.ID, "Production")
-	provider, _ := catalogmodel.NewProvider("Fake", "fake")
-	deployment, _ := catalogmodel.NewDeployment(provider.ID, nil, "fake", "fake-model", "fake", catalogmodel.Scope{Kind: catalogmodel.ScopePlatform}, catalogmodel.CapabilitySet{Text: true})
+	provider, _ := catalogmodel.NewProvider("Fake", catalogmodel.ConnectorFake, "")
+	deployment, _ := catalogmodel.NewDeployment(provider.ID, "fake", "fake-model", catalogmodel.UpstreamFake, catalogmodel.Scope{Kind: catalogmodel.ScopePlatform}, catalogmodel.CapabilitySet{Text: true})
 	alias, _ := catalogmodel.NewModelAlias(project.ID, "assistant")
 	target, _ := catalogmodel.NewRouteTarget(alias.ID, deployment.ID, 0, 100)
 	ctx := context.Background()

@@ -58,7 +58,7 @@ func NewCatalogService(
 }
 
 func (s *CatalogService) CreateProvider(ctx context.Context, command dto.CreateProvider) (dto.ProviderResult, error) {
-	provider, err := catalogmodel.NewProviderWithBaseURL(command.Name, command.ConnectorType, command.BaseURL)
+	provider, err := catalogmodel.NewProvider(command.Name, command.ConnectorType, command.BaseURL)
 	if err != nil {
 		return dto.ProviderResult{}, mapApplicationError(err)
 	}
@@ -150,7 +150,7 @@ func (s *CatalogService) CreateDeployment(ctx context.Context, command dto.Creat
 		if err != nil {
 			return err
 		}
-		deployment, err = catalogmodel.NewDeploymentWithProtocol(command.ProviderID, command.Name, command.UpstreamModel, command.UpstreamProtocol, command.Scope, command.Capabilities)
+		deployment, err = catalogmodel.NewDeployment(command.ProviderID, command.Name, command.UpstreamModel, command.UpstreamProtocol, command.Scope, command.Capabilities)
 		if err != nil {
 			return err
 		}

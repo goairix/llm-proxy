@@ -30,7 +30,8 @@ func TestCompilerIndexesVirtualKeyAndModelAlias(t *testing.T) {
 		t.Fatalf("access = %+v, ok=%v", access, ok)
 	}
 	plan, ok := compiled.routes[RouteKey{ProjectID: access.ProjectID, Model: "assistant"}]
-	if !ok || plan.Deployment.ConnectorType != "fake" || !plan.Deployment.Capabilities.Streaming {
+	provider, providerOK := compiled.providers[plan.Deployment.ProviderID]
+	if !ok || !providerOK || provider.ConnectorType != catalogmodel.ConnectorFake || !plan.Deployment.Capabilities.Streaming {
 		t.Fatalf("plan = %+v, ok=%v", plan, ok)
 	}
 	if compiled.Revision() != config.Revision || !compiled.BuiltAt().Equal(fixedNow) {
@@ -275,9 +276,9 @@ func validSourceConfig(t *testing.T) SourceConfig {
 	organization, _ := tenantmodel.NewOrganization("Acme")
 	project, _ := tenantmodel.NewProject(organization.ID, "Production")
 	key, _ := tenantmodel.NewVirtualKey(project.ID, "ci", [32]byte{1, 2, 3}, "llmp_v1_test", "body", nil)
-	provider, _ := catalogmodel.NewProvider("Fake", "fake")
+	provider, _ := catalogmodel.NewProvider("Fake", catalogmodel.ConnectorFake, "")
 	deployment, _ := catalogmodel.NewDeployment(
-		provider.ID, nil, "Fake", "fake-model", "fake", catalogmodel.Scope{Kind: catalogmodel.ScopePlatform},
+		provider.ID, "Fake", "fake-model", catalogmodel.UpstreamFake, catalogmodel.Scope{Kind: catalogmodel.ScopePlatform},
 		catalogmodel.CapabilitySet{Text: true, Streaming: true},
 	)
 	alias, _ := catalogmodel.NewModelAlias(project.ID, "assistant")
@@ -294,7 +295,7 @@ func validSourceConfig(t *testing.T) SourceConfig {
 func validOpenAISourceConfig(t *testing.T) SourceConfig {
 	t.Helper()
 	source := validSourceConfig(t)
-	provider, err := catalogmodel.NewProviderWithBaseURL("OpenAI", catalogmodel.ConnectorOpenAI, "https://api.openai.com")
+	provider, err := catalogmodel.NewProvider("OpenAI", catalogmodel.ConnectorOpenAI, "https://api.openai.com")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -302,7 +303,7 @@ func validOpenAISourceConfig(t *testing.T) SourceConfig {
 	if err != nil {
 		t.Fatal(err)
 	}
-	deployment, err := catalogmodel.NewDeploymentWithProtocol(
+	deployment, err := catalogmodel.NewDeployment(
 		provider.ID, "GPT-5", "gpt-5", catalogmodel.UpstreamResponses,
 		catalogmodel.Scope{Kind: catalogmodel.ScopePlatform}, catalogmodel.CapabilitySet{Text: true, Streaming: true},
 	)

@@ -112,7 +112,7 @@ func TestProviderCredentialReadNeverReturnsEnvelope(t *testing.T) {
 }
 
 func TestProviderHTTPContractOwnsBaseURL(t *testing.T) {
-	provider, _ := catalogmodel.NewProviderWithBaseURL("OpenAI", catalogmodel.ConnectorOpenAI, "https://api.openai.com")
+	provider, _ := catalogmodel.NewProvider("OpenAI", catalogmodel.ConnectorOpenAI, "https://api.openai.com")
 	catalog := &stubCatalog{
 		createProvider: func(_ context.Context, command dto.CreateProvider) (dto.ProviderResult, error) {
 			if command.Name != "OpenAI" || command.ConnectorType != catalogmodel.ConnectorOpenAI || command.BaseURL != "https://api.openai.com/" {
@@ -150,7 +150,7 @@ func TestDeploymentHTTPContractRejectsLegacyBindingFields(t *testing.T) {
 
 func TestDeploymentHTTPContractUsesUpstreamProtocol(t *testing.T) {
 	providerID := uuid.Must(uuid.NewV7())
-	deployment, _ := catalogmodel.NewDeploymentWithProtocol(
+	deployment, _ := catalogmodel.NewDeployment(
 		providerID, "primary", "gpt-5", catalogmodel.UpstreamResponses,
 		catalogmodel.Scope{Kind: catalogmodel.ScopePlatform}, catalogmodel.CapabilitySet{Text: true},
 	)

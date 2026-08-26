@@ -2,6 +2,7 @@ package model
 
 import (
 	"errors"
+	"reflect"
 	"testing"
 
 	"github.com/google/uuid"
@@ -44,7 +45,7 @@ func TestScopeValidation(t *testing.T) {
 }
 
 func TestCatalogConstructorsUseUUIDv7(t *testing.T) {
-	provider, err := NewProvider("Fake", "fake")
+	provider, err := NewProvider("Fake", ConnectorFake, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -59,7 +60,7 @@ func TestCatalogConstructorsUseUUIDv7(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	deployment, err := NewDeployment(provider.ID, &credential.ID, "fake", "fake-model", "fake", Scope{Kind: ScopePlatform}, CapabilitySet{Text: true})
+	deployment, err := NewDeployment(provider.ID, "fake", "fake-model", UpstreamFake, Scope{Kind: ScopePlatform}, CapabilitySet{Text: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -91,7 +92,7 @@ func TestCatalogConstructorsUseUUIDv7(t *testing.T) {
 }
 
 func TestProviderNormalizesBaseURLAndSupportsProtocols(t *testing.T) {
-	provider, err := NewProviderWithBaseURL("OpenAI", ConnectorOpenAI, "https://api.openai.com/")
+	provider, err := NewProvider("OpenAI", ConnectorOpenAI, "https://api.openai.com/")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,7 +114,7 @@ func TestProviderRejectsUnsafeBaseURL(t *testing.T) {
 		"https://api.openai.com#x",
 	} {
 		t.Run(value, func(t *testing.T) {
-			if _, err := NewProviderWithBaseURL("OpenAI", ConnectorOpenAI, value); err == nil {
+			if _, err := NewProvider("OpenAI", ConnectorOpenAI, value); err == nil {
 				t.Fatalf("BaseURL %q accepted", value)
 			}
 		})
@@ -121,14 +122,14 @@ func TestProviderRejectsUnsafeBaseURL(t *testing.T) {
 }
 
 func TestFakeProviderRejectsBaseURL(t *testing.T) {
-	if _, err := NewProviderWithBaseURL("Fake", ConnectorFake, "https://example.invalid"); err == nil {
+	if _, err := NewProvider("Fake", ConnectorFake, "https://example.invalid"); err == nil {
 		t.Fatal("Fake provider accepted BaseURL")
 	}
 }
 
 func TestDeploymentOwnsProtocolButNotProviderTransportConfiguration(t *testing.T) {
 	providerID := uuid.Must(uuid.NewV7())
-	deployment, err := NewDeploymentWithProtocol(
+	deployment, err := NewDeployment(
 		providerID,
 		"gpt-5",
 		"gpt-5",
@@ -141,6 +142,15 @@ func TestDeploymentOwnsProtocolButNotProviderTransportConfiguration(t *testing.T
 	}
 	if deployment.ProviderID != providerID || deployment.UpstreamProtocol != UpstreamResponses {
 		t.Fatalf("deployment = %+v", deployment)
+	}
+}
+
+func TestDeploymentDoesNotDuplicateProviderOrCredentialConfiguration(t *testing.T) {
+	typeOfDeployment := reflect.TypeOf(Deployment{})
+	for _, field := range []string{"CredentialID", "ConnectorType"} {
+		if _, found := typeOfDeployment.FieldByName(field); found {
+			t.Fatalf("legacy field %s remains", field)
+		}
 	}
 }
 
@@ -161,17 +171,17 @@ func TestCatalogConstructorsRejectInvalidInput(t *testing.T) {
 		name string
 		new  func() error
 	}{
-		{name: "provider without connector", new: func() error { _, err := NewProvider("Fake", " "); return err }},
+		{name: "provider without connector", new: func() error { _, err := NewProvider("Fake", " ", ""); return err }},
 		{name: "credential without sealed payload", new: func() error {
 			_, err := NewProviderCredential(id, Scope{Kind: ScopePlatform}, SealedCredential{})
 			return err
 		}},
 		{name: "deployment without capabilities", new: func() error {
-			_, err := NewDeployment(id, nil, "fake", "fake-model", "fake", Scope{Kind: ScopePlatform}, CapabilitySet{})
+			_, err := NewDeployment(id, "fake", "fake-model", UpstreamFake, Scope{Kind: ScopePlatform}, CapabilitySet{})
 			return err
 		}},
 		{name: "deployment nil provider", new: func() error {
-			_, err := NewDeployment(uuid.Nil, nil, "fake", "fake-model", "fake", Scope{Kind: ScopePlatform}, validCapabilities)
+			_, err := NewDeployment(uuid.Nil, "fake", "fake-model", UpstreamFake, Scope{Kind: ScopePlatform}, validCapabilities)
 			return err
 		}},
 		{name: "alias nil project", new: func() error { _, err := NewModelAlias(uuid.Nil, "assistant"); return err }},

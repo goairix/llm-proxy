@@ -18,6 +18,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/goairix/llm-proxy/internal/di/provider"
+	catalogmodel "github.com/goairix/llm-proxy/internal/domain/catalog/model"
 	"github.com/goairix/llm-proxy/internal/infrastructure/config"
 	"github.com/goairix/llm-proxy/internal/infrastructure/persistence/database"
 	"github.com/goairix/llm-proxy/internal/infrastructure/persistence/entity"
@@ -123,7 +124,11 @@ func TestControlPlaneIntegrationWithPostgresStoresOnlyProtectedSecrets(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	if access.ProjectID != project.ID || plan.Deployment.ID != deployment.ID || plan.Deployment.ConnectorType != "fake" {
+	providerPlan, err := session.Provider(plan.Deployment.ProviderID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if access.ProjectID != project.ID || plan.Deployment.ID != deployment.ID || providerPlan.ConnectorType != catalogmodel.ConnectorFake {
 		t.Fatalf("shared gateway snapshot access=%+v plan=%+v", access, plan)
 	}
 	disabledAlias := patchResource(t, handler, "/v1/model-aliases/"+modelAlias.ID.String(), `{"status":"disabled"}`)
