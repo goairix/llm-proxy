@@ -81,7 +81,7 @@ func (s *chatStream) Recv(ctx context.Context) (inference.Event, error) {
 			if errors.Is(err, io.EOF) {
 				return inference.Event{}, invalidChatResponse(fmt.Errorf("stream ended before [DONE]"))
 			}
-			return inference.Event{}, err
+			return inference.Event{}, classifyStreamReadError(ctx, err)
 		}
 		if string(event.Data) == "[DONE]" {
 			if !s.finished {

@@ -32,7 +32,6 @@ type responsesStreamEvent struct {
 type responsesStream struct {
 	recvMu       sync.Mutex
 	reader       *sseReader
-	invocation   gatewayport.Invocation
 	start        inference.Event
 	queue        []inference.Event
 	sequenceSeen bool
@@ -75,7 +74,7 @@ func newResponsesStream(reader *sseReader, invocation gatewayport.Invocation, id
 		return nil, invalidResponsesResponse(err)
 	}
 	return &responsesStream{
-		reader: reader, invocation: invocation, start: start, outputTypes: make(map[int]string),
+		reader: reader, start: start, outputTypes: make(map[int]string),
 		outputBlocks: make(map[int][]int), content: make(map[[2]int]responsesContentState),
 		tools: make(map[int]*responsesToolState), active: make(map[int]struct{}),
 	}, nil
@@ -99,7 +98,7 @@ func (s *responsesStream) Recv(ctx context.Context) (inference.Event, error) {
 			if errors.Is(err, io.EOF) {
 				return inference.Event{}, invalidResponsesResponse(fmt.Errorf("Responses stream ended before a terminal event"))
 			}
-			return inference.Event{}, err
+			return inference.Event{}, classifyStreamReadError(ctx, err)
 		}
 		if len(event.Data) == 0 {
 			continue
