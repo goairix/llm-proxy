@@ -249,6 +249,8 @@ func normalizeEndpoint(provider, path string) string {
 		switch path {
 		case "/openai/v1/responses":
 			return "responses"
+		case "/v1/responses":
+			return "responses"
 		case "/openai/v1/responses/compact":
 			return "responses.compact"
 		case "/openai/v1/chat/completions", "/v1/chat/completions":

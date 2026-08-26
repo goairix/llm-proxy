@@ -21,6 +21,7 @@ func (identityInstrumenter) WrapHandler(_ string, next http.Handler) http.Handle
 
 func TestRouterUnifiedGatewayRoutesAreExactAndOptional(t *testing.T) {
 	openAICalls := 0
+	responsesCalls := 0
 	anthropicCalls := 0
 	handler := New(Config{BaseURL: "http://localhost:8080", Version: "1.0.0"}, Dependencies{
 		Logger:          zap.NewNop(),
@@ -34,6 +35,10 @@ func TestRouterUnifiedGatewayRoutesAreExactAndOptional(t *testing.T) {
 			openAICalls++
 			w.WriteHeader(http.StatusCreated)
 		}),
+		OpenAIResponsesGateway: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			responsesCalls++
+			w.WriteHeader(http.StatusNonAuthoritativeInfo)
+		}),
 		AnthropicGateway: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			anthropicCalls++
 			w.WriteHeader(http.StatusAccepted)
@@ -45,6 +50,7 @@ func TestRouterUnifiedGatewayRoutesAreExactAndOptional(t *testing.T) {
 		wantStatus int
 	}{
 		{path: "/v1/chat/completions", wantStatus: http.StatusCreated},
+		{path: "/v1/responses", wantStatus: http.StatusNonAuthoritativeInfo},
 		{path: "/v1/messages", wantStatus: http.StatusAccepted},
 	} {
 		request := httptest.NewRequest(http.MethodPost, test.path, strings.NewReader(`{}`))
@@ -54,11 +60,11 @@ func TestRouterUnifiedGatewayRoutesAreExactAndOptional(t *testing.T) {
 			t.Fatalf("POST %s status=%d, want %d", test.path, recorder.Code, test.wantStatus)
 		}
 	}
-	if openAICalls != 1 || anthropicCalls != 1 {
-		t.Fatalf("gateway calls openai=%d anthropic=%d", openAICalls, anthropicCalls)
+	if openAICalls != 1 || responsesCalls != 1 || anthropicCalls != 1 {
+		t.Fatalf("gateway calls openai=%d responses=%d anthropic=%d", openAICalls, responsesCalls, anthropicCalls)
 	}
 
-	for _, path := range []string{"/v1/chat/completions", "/v1/messages"} {
+	for _, path := range []string{"/v1/chat/completions", "/v1/responses", "/v1/messages"} {
 		recorder := httptest.NewRecorder()
 		handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, path, nil))
 		if recorder.Code != http.StatusMethodNotAllowed || recorder.Header().Get("Allow") != http.MethodPost {
@@ -89,7 +95,7 @@ func TestRouterTransparentProviderRoutes(t *testing.T) {
 		authorization string
 		anthropicKey  string
 	}
-	received := make(chan upstreamRequest, 2)
+	received := make(chan upstreamRequest, 3)
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		received <- upstreamRequest{
 			path:          r.URL.EscapedPath(),
@@ -133,6 +139,7 @@ func TestRouterTransparentProviderRoutes(t *testing.T) {
 		wantPath      string
 	}{
 		{name: "openai", path: "/openai/v1/chat/completions", authorization: "Bearer sk-openai", wantPath: "/v1/chat/completions"},
+		{name: "openai responses", path: "/openai/v1/responses", authorization: "Bearer sk-openai", wantPath: "/v1/responses"},
 		{name: "anthropic", path: "/anthropic/v1/messages", anthropicKey: "sk-ant", wantPath: "/v1/messages"},
 	}
 	for _, tc := range tests {
@@ -152,15 +159,15 @@ func TestRouterTransparentProviderRoutes(t *testing.T) {
 		})
 	}
 
-	if got := stats.Total.Load(); got != 2 {
-		t.Fatalf("proxy total = %d, want 2", got)
+	if got := stats.Total.Load(); got != 3 {
+		t.Fatalf("proxy total = %d, want 3", got)
 	}
 	healthRecorder := httptest.NewRecorder()
 	handler.ServeHTTP(healthRecorder, httptest.NewRequest(http.MethodGet, "/healthz", nil))
 	if healthRecorder.Code != http.StatusOK {
 		t.Fatalf("health status = %d, want 200", healthRecorder.Code)
 	}
-	if got := stats.Total.Load(); got != 2 {
+	if got := stats.Total.Load(); got != 3 {
 		t.Fatalf("health request changed stats total to %d", got)
 	}
 }

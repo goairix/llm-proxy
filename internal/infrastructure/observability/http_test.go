@@ -71,6 +71,7 @@ func TestNormalizeEndpoint(t *testing.T) {
 		{provider: "openai", path: "/openai/v1/responses/compact", want: "responses.compact"},
 		{provider: "openai", path: "/openai/v1/chat/completions", want: "chat.completions"},
 		{provider: "openai", path: "/v1/chat/completions", want: "chat.completions"},
+		{provider: "openai", path: "/v1/responses", want: "responses"},
 		{provider: "openai", path: "/openai/v1/completions", want: "completions"},
 		{provider: "anthropic", path: "/anthropic/v1/messages", want: "messages"},
 		{provider: "anthropic", path: "/v1/messages", want: "messages"},

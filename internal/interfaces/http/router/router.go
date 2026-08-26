@@ -27,17 +27,18 @@ type Config struct {
 
 // Dependencies contains the handlers and shared runtime services assembled by DI.
 type Dependencies struct {
-	Logger           *zap.Logger
-	Instrumenter     Instrumenter
-	Readiness        *appRuntime.Readiness
-	Stats            *dashboard.Stats
-	ObserverFactory  appRuntime.UsageObserverFactory
-	OpenAIProxy      http.Handler
-	AnthropicProxy   http.Handler
-	OpenAIGateway    http.Handler
-	AnthropicGateway http.Handler
-	ControlPlane     http.Handler
-	ControlAuth      controlport.ControlPlaneAuthorizer
+	Logger                 *zap.Logger
+	Instrumenter           Instrumenter
+	Readiness              *appRuntime.Readiness
+	Stats                  *dashboard.Stats
+	ObserverFactory        appRuntime.UsageObserverFactory
+	OpenAIProxy            http.Handler
+	AnthropicProxy         http.Handler
+	OpenAIGateway          http.Handler
+	OpenAIResponsesGateway http.Handler
+	AnthropicGateway       http.Handler
+	ControlPlane           http.Handler
+	ControlAuth            controlport.ControlPlaneAuthorizer
 }
 
 // New builds the HTTP routing tree without owning the server lifecycle.
@@ -66,6 +67,13 @@ func New(cfg Config, deps Dependencies) http.Handler {
 		)
 		mux.Handle("POST /v1/chat/completions", deps.Instrumenter.WrapHandler("openai", openAIGateway))
 		mux.Handle("/v1/chat/completions", methodNotAllowed(http.MethodPost))
+	}
+	if deps.OpenAIResponsesGateway != nil {
+		responsesGateway := middleware.RequestID(
+			middleware.GatewayLogging(deps.Logger, "openai", "responses")(deps.OpenAIResponsesGateway),
+		)
+		mux.Handle("POST /v1/responses", deps.Instrumenter.WrapHandler("openai", responsesGateway))
+		mux.Handle("/v1/responses", methodNotAllowed(http.MethodPost))
 	}
 	if deps.AnthropicGateway != nil {
 		anthropicGateway := middleware.RequestID(
