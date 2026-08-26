@@ -100,8 +100,25 @@ func TestReaderLoadKeepsOneRepeatableReadViewDuringConcurrentCommit(t *testing.T
 		BaseEntity: entity.BaseEntity{ID: uuid.Must(uuid.NewV7()), CreatedAt: now, UpdatedAt: now},
 		Name:       "First", Status: string(sharedmodel.StatusActive),
 	}
-	if err := readerDB.Create(&first).Error; err != nil {
-		t.Fatal(err)
+	firstProvider := entity.Provider{
+		BaseEntity: entity.BaseEntity{ID: uuid.Must(uuid.NewV7()), CreatedAt: now, UpdatedAt: now},
+		Name:       "First Fake", ConnectorType: "fake", BaseURL: "", Status: string(sharedmodel.StatusActive),
+	}
+	firstCredential := entity.ProviderCredential{
+		BaseEntity: entity.BaseEntity{ID: uuid.Must(uuid.NewV7()), CreatedAt: now, UpdatedAt: now},
+		ProviderID: firstProvider.ID, ScopeKind: "platform", KeyVersion: "v1",
+		WrappedKeyNonce: []byte{1}, WrappedDataKey: []byte{2}, PayloadNonce: []byte{3}, Ciphertext: []byte{4},
+		Status: string(sharedmodel.StatusActive),
+	}
+	firstDeployment := entity.Deployment{
+		BaseEntity: entity.BaseEntity{ID: uuid.Must(uuid.NewV7()), CreatedAt: now, UpdatedAt: now},
+		ProviderID: firstProvider.ID, Name: "First", UpstreamModel: "fake-model", UpstreamProtocol: "fake",
+		ScopeKind: "platform", Capabilities: `{"text":true}`, Status: string(sharedmodel.StatusActive),
+	}
+	for _, value := range []any{&first, &firstProvider, &firstCredential, &firstDeployment} {
+		if err := readerDB.Create(value).Error; err != nil {
+			t.Fatal(err)
+		}
 	}
 	if err := readerDB.Model(&entity.ConfigRevision{}).Where("revision = ?", 0).Updates(map[string]any{"revision": 1, "updated_at": now}).Error; err != nil {
 		t.Fatal(err)
@@ -133,9 +150,26 @@ func TestReaderLoadKeepsOneRepeatableReadViewDuringConcurrentCommit(t *testing.T
 			BaseEntity: entity.BaseEntity{ID: uuid.Must(uuid.NewV7()), CreatedAt: now, UpdatedAt: now},
 			Name:       "Second", Status: string(sharedmodel.StatusActive),
 		}
+		secondProvider := entity.Provider{
+			BaseEntity: entity.BaseEntity{ID: uuid.Must(uuid.NewV7()), CreatedAt: now, UpdatedAt: now},
+			Name:       "Second OpenAI", ConnectorType: "openai", BaseURL: "https://api.openai.com", Status: string(sharedmodel.StatusActive),
+		}
+		secondCredential := entity.ProviderCredential{
+			BaseEntity: entity.BaseEntity{ID: uuid.Must(uuid.NewV7()), CreatedAt: now, UpdatedAt: now},
+			ProviderID: secondProvider.ID, ScopeKind: "platform", KeyVersion: "v1",
+			WrappedKeyNonce: []byte{5}, WrappedDataKey: []byte{6}, PayloadNonce: []byte{7}, Ciphertext: []byte{8},
+			Status: string(sharedmodel.StatusActive),
+		}
+		secondDeployment := entity.Deployment{
+			BaseEntity: entity.BaseEntity{ID: uuid.Must(uuid.NewV7()), CreatedAt: now, UpdatedAt: now},
+			ProviderID: secondProvider.ID, Name: "Second", UpstreamModel: "gpt-test", UpstreamProtocol: "responses",
+			ScopeKind: "platform", Capabilities: `{"text":true}`, Status: string(sharedmodel.StatusActive),
+		}
 		writerErr = writerDB.Transaction(func(tx *gorm.DB) error {
-			if err := tx.Create(&second).Error; err != nil {
-				return err
+			for _, value := range []any{&second, &secondProvider, &secondCredential, &secondDeployment} {
+				if err := tx.Create(value).Error; err != nil {
+					return err
+				}
 			}
 			return tx.Model(&entity.ConfigRevision{}).Where("revision = ?", 1).Updates(map[string]any{"revision": 2, "updated_at": now}).Error
 		})
@@ -150,8 +184,11 @@ func TestReaderLoadKeepsOneRepeatableReadViewDuringConcurrentCommit(t *testing.T
 	if writerErr != nil {
 		t.Fatal(writerErr)
 	}
-	if got.Revision != 1 || len(got.Organizations) != 1 || got.Organizations[0].ID != first.ID {
-		t.Fatalf("mixed runtime view: revision=%d organizations=%+v", got.Revision, got.Organizations)
+	if got.Revision != 1 || len(got.Organizations) != 1 || got.Organizations[0].ID != first.ID ||
+		len(got.Providers) != 1 || got.Providers[0].ID != firstProvider.ID ||
+		len(got.Credentials) != 1 || got.Credentials[0].ID != firstCredential.ID ||
+		len(got.Deployments) != 1 || got.Deployments[0].ID != firstDeployment.ID {
+		t.Fatalf("mixed runtime view: revision=%d organizations=%+v providers=%+v credentials=%+v deployments=%+v", got.Revision, got.Organizations, got.Providers, got.Credentials, got.Deployments)
 	}
 	current, err := reader.CurrentRevision(context.Background())
 	if err != nil || current != 2 {

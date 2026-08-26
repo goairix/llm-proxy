@@ -28,12 +28,32 @@ type CredentialEnvelope struct {
 	Sealed       catalogmodel.SealedCredential
 }
 
-type Deployment struct {
+type Provider struct {
 	ID            uuid.UUID
-	ProviderID    uuid.UUID
 	ConnectorType string
-	UpstreamModel string
-	Capabilities  catalogmodel.CapabilitySet
+	BaseURL       string
+}
+
+type CredentialPoolKey struct {
+	ProviderID uuid.UUID
+	ScopeKind  catalogmodel.ScopeKind
+	TargetID   uuid.UUID
+}
+
+type CredentialPool struct {
+	Key         CredentialPoolKey
+	Credentials []CredentialEnvelope
+}
+
+type Deployment struct {
+	ID               uuid.UUID
+	ProviderID       uuid.UUID
+	UpstreamModel    string
+	UpstreamProtocol catalogmodel.UpstreamProtocol
+	Capabilities     catalogmodel.CapabilitySet
+	// ConnectorType and Credential are temporary compatibility fields for the
+	// pre-provider-aware Gateway. Compiler only populates ConnectorType for Fake.
+	ConnectorType string
 	Credential    *CredentialEnvelope
 }
 
@@ -48,6 +68,8 @@ type RuntimeSnapshot struct {
 	builtAt     time.Time
 	virtualKeys map[[32]byte]AccessContext
 	routes      map[RouteKey]RoutePlan
+	providers   map[uuid.UUID]Provider
+	credentials map[CredentialPoolKey][]CredentialEnvelope
 	compiled    bool
 }
 
@@ -83,4 +105,10 @@ func cloneSealedCredential(sealed catalogmodel.SealedCredential) catalogmodel.Se
 		PayloadNonce:    append([]byte(nil), sealed.PayloadNonce...),
 		Ciphertext:      append([]byte(nil), sealed.Ciphertext...),
 	}
+}
+
+func cloneCredentialEnvelope(value CredentialEnvelope) CredentialEnvelope {
+	result := value
+	result.Sealed = cloneSealedCredential(value.Sealed)
+	return result
 }

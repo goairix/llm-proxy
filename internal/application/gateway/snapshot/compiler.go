@@ -1,7 +1,9 @@
 package snapshot
 
 import (
+	"bytes"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/google/uuid"
@@ -56,6 +58,7 @@ func (c *Compiler) Compile(source SourceConfig, now time.Time) (*RuntimeSnapshot
 
 	providers := make(map[uuid.UUID]catalogmodel.Provider, len(source.Providers))
 	activeProviders := make(map[uuid.UUID]catalogmodel.Provider, len(source.Providers))
+	runtimeProviders := make(map[uuid.UUID]Provider, len(source.Providers))
 	for _, provider := range source.Providers {
 		if err := provider.Validate(); err != nil {
 			return nil, compileError(source.Revision, "provider", provider.ID, err)
@@ -66,16 +69,17 @@ func (c *Compiler) Compile(source SourceConfig, now time.Time) (*RuntimeSnapshot
 		providers[provider.ID] = provider
 		if provider.Status == sharedmodel.StatusActive {
 			activeProviders[provider.ID] = provider
+			runtimeProviders[provider.ID] = Provider{ID: provider.ID, ConnectorType: provider.ConnectorType, BaseURL: provider.BaseURL}
 		}
 	}
 
-	credentials := make(map[uuid.UUID]catalogmodel.ProviderCredential, len(source.Credentials))
-	activeCredentials := make(map[uuid.UUID]catalogmodel.ProviderCredential, len(source.Credentials))
+	credentialIDs := make(map[uuid.UUID]struct{}, len(source.Credentials))
+	credentialIndex := make(map[CredentialPoolKey][]CredentialEnvelope)
 	for _, credential := range source.Credentials {
 		if err := credential.Validate(); err != nil {
 			return nil, compileError(source.Revision, "provider credential", credential.ID, err)
 		}
-		if _, exists := credentials[credential.ID]; exists {
+		if _, exists := credentialIDs[credential.ID]; exists {
 			return nil, compileMessage(source.Revision, "provider credential", credential.ID, "ID 重复")
 		}
 		if _, exists := providers[credential.ProviderID]; !exists {
@@ -84,11 +88,20 @@ func (c *Compiler) Compile(source SourceConfig, now time.Time) (*RuntimeSnapshot
 		if err := validateScopeReferences(credential.Scope, organizations, projects); err != nil {
 			return nil, compileError(source.Revision, "provider credential", credential.ID, err)
 		}
-		credentials[credential.ID] = credential
+		credentialIDs[credential.ID] = struct{}{}
 		_, providerActive := activeProviders[credential.ProviderID]
 		if credential.Status == sharedmodel.StatusActive && providerActive && scopeActive(credential.Scope, activeOrganizations, activeProjects) {
-			activeCredentials[credential.ID] = credential
+			key := credentialPoolKey(credential.ProviderID, credential.Scope)
+			credentialIndex[key] = append(credentialIndex[key], CredentialEnvelope{
+				CredentialID: credential.ID, ProviderID: credential.ProviderID,
+				Scope: credential.Scope, Sealed: cloneSealedCredential(credential.Sealed),
+			})
 		}
+	}
+	for key := range credentialIndex {
+		sort.Slice(credentialIndex[key], func(left, right int) bool {
+			return bytes.Compare(credentialIndex[key][left].CredentialID[:], credentialIndex[key][right].CredentialID[:]) < 0
+		})
 	}
 
 	allDeployments := make(map[uuid.UUID]catalogmodel.Deployment, len(source.Deployments))
@@ -104,44 +117,26 @@ func (c *Compiler) Compile(source SourceConfig, now time.Time) (*RuntimeSnapshot
 		if !exists {
 			return nil, compileMessage(source.Revision, "deployment", deployment.ID, "引用的 Provider 不存在")
 		}
-		if provider.ConnectorType != deployment.ConnectorType {
+		if deployment.ConnectorType != "" && provider.ConnectorType != deployment.ConnectorType {
 			return nil, compileMessage(source.Revision, "deployment", deployment.ID, "Connector 类型与 Provider 不一致")
+		}
+		if !provider.Supports(deployment.UpstreamProtocol) {
+			return nil, compileMessage(source.Revision, "deployment", deployment.ID, "Provider 不支持 UpstreamProtocol")
 		}
 		if err := validateScopeReferences(deployment.Scope, organizations, projects); err != nil {
 			return nil, compileError(source.Revision, "deployment", deployment.ID, err)
 		}
-		var credentialEnvelope *CredentialEnvelope
-		credentialActive := deployment.CredentialID == nil
-		if deployment.CredentialID == nil {
-			if deployment.ConnectorType != "fake" {
-				return nil, compileMessage(source.Revision, "deployment", deployment.ID, "非 Fake Deployment 缺少 Credential")
-			}
-		} else {
-			credential, found := credentials[*deployment.CredentialID]
-			if !found {
-				return nil, compileMessage(source.Revision, "deployment", deployment.ID, "引用的 Credential 不存在")
-			}
-			if credential.ProviderID != deployment.ProviderID {
-				return nil, compileMessage(source.Revision, "deployment", deployment.ID, "Credential 不属于 Provider")
-			}
-			organizationID := deploymentOrganizationID(deployment.Scope, projects)
-			if !credentialScopeCovers(credential.Scope, deployment.Scope, organizationID) {
-				return nil, compileMessage(source.Revision, "deployment", deployment.ID, "Credential 作用域不允许该 Deployment")
-			}
-			if activeCredential, found := activeCredentials[credential.ID]; found {
-				credentialActive = true
-				credentialEnvelope = &CredentialEnvelope{
-					CredentialID: activeCredential.ID, ProviderID: activeCredential.ProviderID,
-					Scope: activeCredential.Scope, Sealed: cloneSealedCredential(activeCredential.Sealed),
-				}
-			}
-		}
 		allDeployments[deployment.ID] = deployment
 		_, providerActive := activeProviders[deployment.ProviderID]
-		if deployment.Status == sharedmodel.StatusActive && providerActive && credentialActive && scopeActive(deployment.Scope, activeOrganizations, activeProjects) {
+		if deployment.Status == sharedmodel.StatusActive && providerActive && scopeActive(deployment.Scope, activeOrganizations, activeProjects) {
+			connectorType := ""
+			if provider.ConnectorType == catalogmodel.ConnectorFake {
+				connectorType = provider.ConnectorType
+			}
 			activeDeployments[deployment.ID] = Deployment{
-				ID: deployment.ID, ProviderID: deployment.ProviderID, ConnectorType: deployment.ConnectorType,
-				UpstreamModel: deployment.UpstreamModel, Capabilities: deployment.Capabilities, Credential: credentialEnvelope,
+				ID: deployment.ID, ProviderID: deployment.ProviderID, UpstreamModel: deployment.UpstreamModel,
+				UpstreamProtocol: deployment.UpstreamProtocol, Capabilities: deployment.Capabilities,
+				ConnectorType: connectorType, Credential: nil,
 			}
 		}
 	}
@@ -238,7 +233,10 @@ func (c *Compiler) Compile(source SourceConfig, now time.Time) (*RuntimeSnapshot
 		routes[key] = RoutePlan{AliasID: alias.ID, Alias: alias.Name, Deployment: deployment}
 	}
 
-	return &RuntimeSnapshot{revision: source.Revision, builtAt: now, virtualKeys: virtualKeys, routes: routes, compiled: true}, nil
+	return &RuntimeSnapshot{
+		revision: source.Revision, builtAt: now, virtualKeys: virtualKeys, routes: routes,
+		providers: runtimeProviders, credentials: credentialIndex, compiled: true,
+	}, nil
 }
 
 func validateScopeReferences(scope catalogmodel.Scope, organizations map[uuid.UUID]tenancymodel.Organization, projects map[uuid.UUID]tenancymodel.Project) error {
@@ -272,27 +270,15 @@ func scopeActive(scope catalogmodel.Scope, organizations map[uuid.UUID]tenancymo
 	}
 }
 
-func deploymentOrganizationID(scope catalogmodel.Scope, projects map[uuid.UUID]tenancymodel.Project) uuid.UUID {
-	if scope.Kind == catalogmodel.ScopeOrganization {
-		return scope.OrganizationID
-	}
-	if scope.Kind == catalogmodel.ScopeProject {
-		return projects[scope.ProjectID].OrganizationID
-	}
-	return uuid.Nil
-}
-
-func credentialScopeCovers(credentialScope, deploymentScope catalogmodel.Scope, deploymentOrganizationID uuid.UUID) bool {
-	switch credentialScope.Kind {
-	case catalogmodel.ScopePlatform:
-		return true
+func credentialPoolKey(providerID uuid.UUID, scope catalogmodel.Scope) CredentialPoolKey {
+	key := CredentialPoolKey{ProviderID: providerID, ScopeKind: scope.Kind}
+	switch scope.Kind {
 	case catalogmodel.ScopeOrganization:
-		return credentialScope.OrganizationID == deploymentOrganizationID
+		key.TargetID = scope.OrganizationID
 	case catalogmodel.ScopeProject:
-		return deploymentScope.Kind == catalogmodel.ScopeProject && credentialScope.ProjectID == deploymentScope.ProjectID
-	default:
-		return false
+		key.TargetID = scope.ProjectID
 	}
+	return key
 }
 
 func deploymentVisibleToProject(scope catalogmodel.Scope, projectID, organizationID uuid.UUID) bool {
