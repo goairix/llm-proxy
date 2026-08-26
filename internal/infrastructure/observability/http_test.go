@@ -2,6 +2,7 @@ package observability
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -15,6 +16,52 @@ import (
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"go.opentelemetry.io/otel/trace"
 )
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) { return f(request) }
+
+func TestTransportForHidesProviderBaseURL(t *testing.T) {
+	runtime, spans, _ := newHTTPTestRuntime(t)
+	transport := runtime.TransportFor("openai_compatible", "responses", roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		if request.URL.String() != "https://private.internal/prefix/v1/responses" {
+			t.Fatalf("url=%s", request.URL)
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader("{}")), Request: request,
+		}, nil
+	}))
+	ctx, parent := runtime.tracerProvider.Tracer("test").Start(context.Background(), "parent")
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://private.internal/prefix/v1/responses", strings.NewReader(`{"model":"gpt-5"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := transport.RoundTrip(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = response.Body.Close()
+	parent.End()
+
+	var clientSpan sdktrace.ReadOnlySpan
+	for _, span := range spans.Ended() {
+		if span.SpanKind() == trace.SpanKindClient {
+			clientSpan = span
+			break
+		}
+	}
+	if clientSpan == nil {
+		t.Fatalf("client span not found: %d spans", len(spans.Ended()))
+	}
+	assertSpanDoesNotContain(t, clientSpan, "private.internal", "/prefix", "gpt-5")
+	var attributes strings.Builder
+	for _, attr := range clientSpan.Attributes() {
+		attributes.WriteString(attr.Value.Emit())
+	}
+	if !strings.Contains(attributes.String(), "/openai_compatible/responses") {
+		t.Fatalf("static upstream route missing: %s", attributes.String())
+	}
+}
 
 func TestNormalizeEndpoint(t *testing.T) {
 	tests := []struct {

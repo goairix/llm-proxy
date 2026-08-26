@@ -71,10 +71,22 @@ type ObservabilityConfig struct {
 
 // GatewayConfig controls the unified gateway runtime.
 type GatewayConfig struct {
-	Enabled          bool          `mapstructure:"enabled"`
-	SnapshotInterval time.Duration `mapstructure:"snapshot_interval"`
-	SnapshotTimeout  time.Duration `mapstructure:"snapshot_timeout"`
-	RetryBackoff     time.Duration `mapstructure:"retry_backoff"`
+	Enabled          bool                    `mapstructure:"enabled"`
+	SnapshotInterval time.Duration           `mapstructure:"snapshot_interval"`
+	SnapshotTimeout  time.Duration           `mapstructure:"snapshot_timeout"`
+	RetryBackoff     time.Duration           `mapstructure:"retry_backoff"`
+	Upstream         UpstreamTransportConfig `mapstructure:"upstream"`
+}
+
+type UpstreamTransportConfig struct {
+	ConnectTimeout            time.Duration `mapstructure:"connect_timeout"`
+	TLSHandshakeTimeout       time.Duration `mapstructure:"tls_handshake_timeout"`
+	ResponseHeaderTimeout     time.Duration `mapstructure:"response_header_timeout"`
+	CompleteTimeout           time.Duration `mapstructure:"complete_timeout"`
+	StreamIdleTimeout         time.Duration `mapstructure:"stream_idle_timeout"`
+	IdleConnectionTimeout     time.Duration `mapstructure:"idle_connection_timeout"`
+	MaxIdleConnections        int           `mapstructure:"max_idle_connections"`
+	MaxIdleConnectionsPerHost int           `mapstructure:"max_idle_connections_per_host"`
 }
 
 // DatabaseConfig holds the unified gateway persistence settings.
@@ -126,6 +138,14 @@ func Load(path string) (*Config, error) {
 	v.SetDefault("gateway.snapshot_interval", 5*time.Second)
 	v.SetDefault("gateway.snapshot_timeout", 3*time.Second)
 	v.SetDefault("gateway.retry_backoff", 5*time.Second)
+	v.SetDefault("gateway.upstream.connect_timeout", 10*time.Second)
+	v.SetDefault("gateway.upstream.tls_handshake_timeout", 10*time.Second)
+	v.SetDefault("gateway.upstream.response_header_timeout", 30*time.Second)
+	v.SetDefault("gateway.upstream.complete_timeout", 5*time.Minute)
+	v.SetDefault("gateway.upstream.stream_idle_timeout", 5*time.Minute)
+	v.SetDefault("gateway.upstream.idle_connection_timeout", 90*time.Second)
+	v.SetDefault("gateway.upstream.max_idle_connections", 100)
+	v.SetDefault("gateway.upstream.max_idle_connections_per_host", 10)
 	v.SetDefault("database.driver", "postgres")
 	v.SetDefault("database.dsn", "")
 	v.SetDefault("database.max_idle_connections", 5)
@@ -178,6 +198,14 @@ func validateConfig(cfg *Config) error {
 		if len(key) != 32 {
 			return fmt.Errorf("%s[%s]: decoded length is %d, want 32", envCredentialKeys, version, len(key))
 		}
+	}
+	upstream := cfg.Gateway.Upstream
+	if upstream.ConnectTimeout <= 0 || upstream.TLSHandshakeTimeout <= 0 || upstream.ResponseHeaderTimeout <= 0 ||
+		upstream.CompleteTimeout <= 0 || upstream.StreamIdleTimeout <= 0 || upstream.IdleConnectionTimeout <= 0 {
+		return fmt.Errorf("gateway upstream durations must be positive")
+	}
+	if upstream.MaxIdleConnections <= 0 || upstream.MaxIdleConnectionsPerHost <= 0 || upstream.MaxIdleConnectionsPerHost > upstream.MaxIdleConnections {
+		return fmt.Errorf("gateway upstream connection pool limits are invalid")
 	}
 	if !cfg.Gateway.Enabled {
 		return nil
