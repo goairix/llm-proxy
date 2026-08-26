@@ -228,16 +228,23 @@ func TestIntegrationUnifiedGatewayThroughPostgresAndBothProtocols(t *testing.T) 
 	cfg := openGatewayIntegrationConfig(t)
 	logger := zap.NewNop()
 	runtime := provider.NewGatewayRuntime(cfg, logger)
-	controlPlane, err := provider.NewControlPlaneRuntime(cfg, runtime)
+	cipherRuntime, err := provider.NewCredentialCipherRuntime(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
-	dataPlane := provider.NewUnifiedGatewayHandlers(cfg, runtime)
+	controlPlane, err := provider.NewControlPlaneRuntime(cfg, runtime, cipherRuntime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dataPlane, err := provider.NewUnifiedGatewayHandlers(cfg, runtime, cipherRuntime, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
 	root := router.New(router.Config{BaseURL: "http://localhost", Version: "integration"}, router.Dependencies{
 		Logger: logger, Instrumenter: integrationInstrumenter{}, Readiness: appRuntime.NewReadiness(),
 		Stats: &dashboard.Stats{}, ObserverFactory: tokenusage.NewObserver,
 		OpenAIProxy: http.NotFoundHandler(), AnthropicProxy: http.NotFoundHandler(),
-		OpenAIGateway: dataPlane.OpenAI, AnthropicGateway: dataPlane.Anthropic,
+		OpenAIGateway: dataPlane.OpenAIChat, OpenAIResponsesGateway: dataPlane.OpenAIResponses, AnthropicGateway: dataPlane.Anthropic,
 		ControlPlane: controlPlane.Handler, ControlAuth: controlPlane.Authorizer,
 	})
 	server := httptest.NewServer(root)

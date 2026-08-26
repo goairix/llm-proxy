@@ -10,7 +10,6 @@ import (
 	catalogrepository "github.com/goairix/llm-proxy/internal/infrastructure/persistence/repository/catalog"
 	tenancyrepository "github.com/goairix/llm-proxy/internal/infrastructure/persistence/repository/tenancy"
 	"github.com/goairix/llm-proxy/internal/infrastructure/security/controltoken"
-	credentialsecurity "github.com/goairix/llm-proxy/internal/infrastructure/security/credential"
 	"github.com/goairix/llm-proxy/internal/infrastructure/security/virtualkey"
 	controlhandler "github.com/goairix/llm-proxy/internal/interfaces/http/handler/controlplane"
 )
@@ -22,13 +21,16 @@ type ControlPlaneRuntime struct {
 }
 
 // NewControlPlaneRuntime builds the control plane on the shared gateway persistence runtime.
-func NewControlPlaneRuntime(cfg *config.Config, gateway *GatewayRuntime) (*ControlPlaneRuntime, error) {
+func NewControlPlaneRuntime(cfg *config.Config, gateway *GatewayRuntime, cipherRuntime *CredentialCipherRuntime) (*ControlPlaneRuntime, error) {
 	runtime := &ControlPlaneRuntime{}
 	if cfg == nil || !cfg.Gateway.Enabled {
 		return runtime, nil
 	}
 	if gateway == nil || gateway.Manager == nil {
 		return nil, fmt.Errorf("gateway persistence runtime is unavailable")
+	}
+	if cipherRuntime == nil || cipherRuntime.Cipher == nil {
+		return nil, fmt.Errorf("credential cipher runtime is unavailable")
 	}
 	manager := gateway.Manager
 
@@ -42,14 +44,10 @@ func NewControlPlaneRuntime(cfg *config.Config, gateway *GatewayRuntime) (*Contr
 	targets := catalogrepository.NewRouteTargetRepository(manager)
 	revisions := catalogrepository.NewConfigRevisionRepository(manager)
 
-	cipher, err := credentialsecurity.NewCipher(cfg.CredentialEncryption.CurrentKeyVersion, cfg.CredentialEncryption.Keys)
-	if err != nil {
-		return nil, err
-	}
 	tenancy := controlservice.NewTenancyService(organizations, projects, virtualKeys, revisions, manager, virtualkey.NewGenerator(), gateway)
 	catalog := controlservice.NewCatalogService(
 		providers, credentials, deployments, aliases, targets, organizations, projects,
-		revisions, manager, cipher, gateway,
+		revisions, manager, cipherRuntime.Cipher, gateway,
 	)
 
 	runtime.Handler = controlhandler.New(controlhandler.Dependencies{Tenancy: tenancy, Catalog: catalog})

@@ -72,7 +72,11 @@ func TestControlPlaneIntegrationWithPostgresStoresOnlyProtectedSecrets(t *testin
 		CredentialEncryption: config.CredentialEncryptionConfig{CurrentKeyVersion: "v1", Keys: map[string]string{"v1": keyring}},
 	}
 	gateway := provider.NewGatewayRuntime(cfg, zap.NewNop())
-	runtime, err := provider.NewControlPlaneRuntime(cfg, gateway)
+	cipherRuntime, err := provider.NewCredentialCipherRuntime(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := provider.NewControlPlaneRuntime(cfg, gateway, cipherRuntime)
 	if err != nil {
 		t.Fatal(err)
 	}

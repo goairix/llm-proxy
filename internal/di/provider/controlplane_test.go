@@ -25,7 +25,7 @@ import (
 func TestControlPlaneRuntimeDisabledDoesNotCreateDatabase(t *testing.T) {
 	cfg := &config.Config{}
 	gateway := NewGatewayRuntime(cfg, zap.NewNop())
-	runtime, err := NewControlPlaneRuntime(cfg, gateway)
+	runtime, err := NewControlPlaneRuntime(cfg, gateway, mustCipherRuntime(t, cfg))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -54,7 +54,8 @@ func TestOfflineControlPlaneDoesNotBreakTransparentProxy(t *testing.T) {
 	}
 	logger := zap.NewNop()
 	gateway := NewGatewayRuntime(cfg, logger)
-	controlPlane, err := NewControlPlaneRuntime(cfg, gateway)
+	cipherRuntime := mustCipherRuntime(t, cfg)
+	controlPlane, err := NewControlPlaneRuntime(cfg, gateway, cipherRuntime)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,9 +75,13 @@ func TestOfflineControlPlaneDoesNotBreakTransparentProxy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	dataPlane, err := NewUnifiedGatewayHandlers(cfg, gateway, cipherRuntime, telemetry)
+	if err != nil {
+		t.Fatal(err)
+	}
 	root := NewRootHandler(
 		cfg, logger, telemetry, appRuntime.NewReadiness(), &dashboard.Stats{}, tokenusage.NewObserver,
-		openAI, anthropic, NewUnifiedGatewayHandlers(cfg, gateway), controlPlane,
+		openAI, anthropic, dataPlane, controlPlane,
 	)
 
 	controlRequest := httptest.NewRequest(http.MethodPost, "/v1/organizations", strings.NewReader(`{"name":"Acme"}`))
