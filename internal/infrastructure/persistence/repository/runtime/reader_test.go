@@ -82,7 +82,7 @@ func TestReaderLoadsCompleteConfigFromPostgres(t *testing.T) {
 		len(got.Providers) != 1 || len(got.Credentials) != 1 || len(got.Deployments) != 1 || len(got.ModelAliases) != 1 || len(got.RouteTargets) != 1 {
 		t.Fatalf("incomplete source config: %+v", got)
 	}
-	if got.RouteTargets[0].DeploymentID != got.Deployments[0].ID || got.Deployments[0].CredentialID == nil || *got.Deployments[0].CredentialID != got.Credentials[0].ID {
+	if got.RouteTargets[0].DeploymentID != got.Deployments[0].ID || got.Deployments[0].UpstreamProtocol != "responses" {
 		t.Fatalf("associations changed: %+v", got)
 	}
 }
@@ -171,16 +171,15 @@ func completeRecords(t *testing.T) persistedConfig {
 		BaseEntity: newBase(), ProjectID: project.ID, Name: "ci", Hash: append([]byte(nil), makeHash()...),
 		Prefix: "llmp_v1_test", LastFour: "test", Status: string(sharedmodel.StatusActive),
 	}
-	provider := entity.Provider{BaseEntity: newBase(), Name: "OpenAI", ConnectorType: "openai", Status: string(sharedmodel.StatusActive)}
+	provider := entity.Provider{BaseEntity: newBase(), Name: "OpenAI", ConnectorType: "openai", BaseURL: "https://api.openai.com", Status: string(sharedmodel.StatusActive)}
 	credential := entity.ProviderCredential{
 		BaseEntity: newBase(), ProviderID: provider.ID, ScopeKind: "platform", KeyVersion: "v1",
 		WrappedKeyNonce: []byte{1}, WrappedDataKey: []byte{2}, PayloadNonce: []byte{3}, Ciphertext: []byte{4, 5},
 		Status: string(sharedmodel.StatusActive),
 	}
-	credentialID := credential.ID
 	deployment := entity.Deployment{
-		BaseEntity: newBase(), ProviderID: provider.ID, CredentialID: &credentialID, Name: "primary",
-		UpstreamModel: "gpt-test", ConnectorType: "openai", ScopeKind: "platform",
+		BaseEntity: newBase(), ProviderID: provider.ID, Name: "primary",
+		UpstreamModel: "gpt-test", UpstreamProtocol: "responses", ScopeKind: "platform",
 		Capabilities: `{"text":true,"streaming":true}`, Status: string(sharedmodel.StatusActive),
 	}
 	alias := entity.ModelAlias{BaseEntity: newBase(), ProjectID: project.ID, Name: "assistant", Status: string(sharedmodel.StatusActive)}

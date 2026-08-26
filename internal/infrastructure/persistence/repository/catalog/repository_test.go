@@ -48,9 +48,20 @@ func TestCredentialMapperPreservesEncryptedBytes(t *testing.T) {
 	}
 }
 
-func TestDeploymentMapperPreservesCapabilities(t *testing.T) {
+func TestProviderAndDeploymentMappersPreserveConnectorConfiguration(t *testing.T) {
 	capabilities := catalogmodel.CapabilitySet{Text: true, Tools: true, Streaming: true}
-	deployment, err := catalogmodel.NewDeployment(uuid.Must(uuid.NewV7()), nil, "fake", "fake-model", "fake", catalogmodel.Scope{Kind: catalogmodel.ScopePlatform}, capabilities)
+	provider, err := catalogmodel.NewProviderWithBaseURL("OpenAI", catalogmodel.ConnectorOpenAI, "https://api.openai.com/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	mappedProvider, err := providerToDomain(providerToEntity(provider))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mappedProvider.BaseURL != "https://api.openai.com" || mappedProvider.ConnectorType != catalogmodel.ConnectorOpenAI {
+		t.Fatalf("provider = %+v", mappedProvider)
+	}
+	deployment, err := catalogmodel.NewDeploymentWithProtocol(provider.ID, "responses", "gpt-5", catalogmodel.UpstreamResponses, catalogmodel.Scope{Kind: catalogmodel.ScopePlatform}, capabilities)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -62,8 +73,20 @@ func TestDeploymentMapperPreservesCapabilities(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Capabilities != capabilities {
-		t.Fatalf("capabilities = %+v; want %+v", got.Capabilities, capabilities)
+	if got.Capabilities != capabilities || got.UpstreamProtocol != catalogmodel.UpstreamResponses || got.ProviderID != provider.ID {
+		t.Fatalf("deployment = %+v", got)
+	}
+}
+
+func TestProviderMapperRejectsInvalidPersistedBaseURL(t *testing.T) {
+	provider, err := catalogmodel.NewProviderWithBaseURL("OpenAI", catalogmodel.ConnectorOpenAI, "https://api.openai.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	record := providerToEntity(provider)
+	record.BaseURL = "://invalid"
+	if _, err := providerToDomain(record); err == nil {
+		t.Fatal("invalid persisted BaseURL was accepted")
 	}
 }
 
@@ -111,8 +134,8 @@ func TestCatalogRepositoriesWithPostgres(t *testing.T) {
 	if got, err := deployments.HasActiveByProvider(ctx, provider.ID); err != nil || !got {
 		t.Fatalf("active deployment by provider = %v, %v", got, err)
 	}
-	if got, err := deployments.HasActiveByCredential(ctx, credential.ID); err != nil || !got {
-		t.Fatalf("active deployment by credential = %v, %v", got, err)
+	if got, err := deployments.HasActiveByCredential(ctx, credential.ID); err != nil || got {
+		t.Fatalf("active deployment by credential = %v, %v; want false after pool migration", got, err)
 	}
 	if got, err := targets.HasActiveByDeployment(ctx, deployment.ID); err != nil || !got {
 		t.Fatalf("active target by deployment = %v, %v", got, err)

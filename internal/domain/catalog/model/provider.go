@@ -75,6 +75,15 @@ func (p Provider) Validate() error {
 	case ConnectorOpenAI, ConnectorOpenAICompatible:
 		// Empty BaseURL remains valid only for legacy records until the persistence
 		// migration is complete. NewProviderWithBaseURL rejects it before creation.
+		if strings.TrimSpace(p.BaseURL) != "" {
+			normalized, err := normalizeBaseURL(p.ConnectorType, p.BaseURL, false)
+			if err != nil {
+				return err
+			}
+			if normalized != p.BaseURL {
+				return fmt.Errorf("%w: provider base URL must be normalized", sharederrors.ErrInvalid)
+			}
+		}
 	default:
 		return fmt.Errorf("%w: unsupported provider connector type %q", sharederrors.ErrInvalid, p.ConnectorType)
 	}

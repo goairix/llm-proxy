@@ -45,3 +45,19 @@ func TestPersistenceEntitiesDeclareNoGORMRelationships(t *testing.T) {
 		}
 	}
 }
+
+func TestProviderConnectorPersistenceShape(t *testing.T) {
+	providerType := reflect.TypeOf(Provider{})
+	if _, found := providerType.FieldByName("BaseURL"); !found {
+		t.Fatal("Provider.BaseURL is missing")
+	}
+	deploymentType := reflect.TypeOf(Deployment{})
+	if _, found := deploymentType.FieldByName("UpstreamProtocol"); !found {
+		t.Fatal("Deployment.UpstreamProtocol is missing")
+	}
+	for _, field := range []string{"CredentialID", "ConnectorType"} {
+		if _, found := deploymentType.FieldByName(field); found {
+			t.Fatalf("legacy Deployment.%s remains", field)
+		}
+	}
+}

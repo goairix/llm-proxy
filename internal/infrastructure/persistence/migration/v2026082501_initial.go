@@ -20,6 +20,7 @@ func allMigrations() []*gormigrate.Migration {
 			Migrate:  migrateInitialControlPlane,
 			Rollback: rollbackInitialControlPlane,
 		},
+		providerConnectorMigration(),
 	}
 }
 

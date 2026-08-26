@@ -17,11 +17,14 @@ import (
 
 func TestInitialMigrationID(t *testing.T) {
 	migrations := allMigrations()
-	if len(migrations) != 1 || migrations[0].ID != InitialMigrationID {
+	if len(migrations) != 2 || migrations[0].ID != InitialMigrationID || migrations[1].ID != ProviderConnectorMigrationID {
 		t.Fatalf("migrations = %+v", migrations)
 	}
 	if InitialMigrationID != "2026082501_initial_control_plane" {
 		t.Fatalf("InitialMigrationID = %q", InitialMigrationID)
+	}
+	if ProviderConnectorMigrationID != "2026082601_provider_connectors" {
+		t.Fatalf("ProviderConnectorMigrationID = %q", ProviderConnectorMigrationID)
 	}
 }
 
@@ -52,6 +55,7 @@ func TestPostgresInitialMigration(t *testing.T) {
 	if err := Up(db); err != nil {
 		t.Fatalf("Up() error = %v", err)
 	}
+	assertProviderConnectorMigrationShape(t, db)
 
 	for _, table := range businessTables {
 		if !db.Migrator().HasTable(table) {
@@ -87,10 +91,32 @@ func TestPostgresInitialMigration(t *testing.T) {
 	if err := Down(db); err != nil {
 		t.Fatalf("Down() error = %v", err)
 	}
+	if !db.Migrator().HasColumn("deployments", "credential_id") || !db.Migrator().HasColumn("deployments", "connector_type") {
+		t.Fatal("provider connector rollback did not restore legacy deployment columns")
+	}
+	if db.Migrator().HasColumn("deployments", "upstream_protocol") || db.Migrator().HasColumn("providers", "base_url") {
+		t.Fatal("provider connector rollback retained new columns")
+	}
+	if err := Down(db); err != nil {
+		t.Fatalf("second Down() error = %v", err)
+	}
 	for _, table := range businessTables {
 		if db.Migrator().HasTable(table) {
 			t.Errorf("table %q remains after Down", table)
 		}
+	}
+}
+
+func assertProviderConnectorMigrationShape(t *testing.T, db *gorm.DB) {
+	t.Helper()
+	if !db.Migrator().HasColumn(&entity.Provider{}, "base_url") {
+		t.Fatal("providers.base_url missing")
+	}
+	if !db.Migrator().HasColumn(&entity.Deployment{}, "upstream_protocol") {
+		t.Fatal("deployments.upstream_protocol missing")
+	}
+	if db.Migrator().HasColumn("deployments", "credential_id") || db.Migrator().HasColumn("deployments", "connector_type") {
+		t.Fatal("legacy deployment columns remain")
 	}
 }
 

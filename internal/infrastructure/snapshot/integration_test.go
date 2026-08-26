@@ -107,7 +107,7 @@ func seedSnapshotIntegrationConfig(t *testing.T, db *gorm.DB, revision int64) {
 	provider := entity.Provider{BaseEntity: newBase(), Name: "Fake", ConnectorType: "fake", Status: "active"}
 	deployment := entity.Deployment{
 		BaseEntity: newBase(), ProviderID: provider.ID, Name: "fake", UpstreamModel: "fake-model",
-		ConnectorType: "fake", ScopeKind: "platform", Capabilities: `{"text":true,"streaming":true}`, Status: "active",
+		UpstreamProtocol: "fake", ScopeKind: "platform", Capabilities: `{"text":true,"streaming":true}`, Status: "active",
 	}
 	alias := entity.ModelAlias{BaseEntity: newBase(), ProjectID: project.ID, Name: "assistant", Status: "active"}
 	target := entity.RouteTarget{
