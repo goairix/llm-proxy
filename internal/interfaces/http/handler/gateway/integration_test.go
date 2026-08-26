@@ -158,7 +158,7 @@ func unifiedGatewayTestRouter(gateway gatewayservice.Gateway) http.Handler {
 		Logger: zap.NewNop(), Instrumenter: integrationInstrumenter{}, Readiness: appRuntime.NewReadiness(),
 		Stats: &dashboard.Stats{}, ObserverFactory: tokenusage.NewObserver,
 		OpenAIProxy: http.NotFoundHandler(), AnthropicProxy: http.NotFoundHandler(),
-		OpenAIGateway: gatewayhandler.NewOpenAI(gateway), AnthropicGateway: gatewayhandler.NewAnthropic(gateway),
+		OpenAIGateway: gatewayhandler.NewOpenAI(gateway), OpenAIResponsesGateway: gatewayhandler.NewResponses(gateway), AnthropicGateway: gatewayhandler.NewAnthropic(gateway),
 	})
 }
 
