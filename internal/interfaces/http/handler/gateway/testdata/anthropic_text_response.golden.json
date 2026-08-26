@@ -1,0 +1,1 @@
+{"id":"msg_<uuidv7>","type":"message","role":"assistant","content":[{"type":"text","text":"回显: hello"}],"model":"assistant","stop_reason":"end_turn","stop_sequence":null,"usage":{"input_tokens":<tokens>,"output_tokens":<tokens>}}

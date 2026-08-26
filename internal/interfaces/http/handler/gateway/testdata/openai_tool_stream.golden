@@ -1,0 +1,15 @@
+data: {"id":"chatcmpl-<uuidv7>","object":"chat.completion.chunk","created":<created>,"model":"assistant","choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":null}],"usage":null}
+
+data: {"id":"chatcmpl-<uuidv7>","object":"chat.completion.chunk","created":<created>,"model":"assistant","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_<uuidv7>","type":"function","function":{"name":"weather","arguments":""}}]},"finish_reason":null}],"usage":null}
+
+data: {"id":"chatcmpl-<uuidv7>","object":"chat.completion.chunk","created":<created>,"model":"assistant","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"city\":"}}]},"finish_reason":null}],"usage":null}
+
+data: {"id":"chatcmpl-<uuidv7>","object":"chat.completion.chunk","created":<created>,"model":"assistant","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\"Shangha"}}]},"finish_reason":null}],"usage":null}
+
+data: {"id":"chatcmpl-<uuidv7>","object":"chat.completion.chunk","created":<created>,"model":"assistant","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"i\"}"}}]},"finish_reason":null}],"usage":null}
+
+data: {"id":"chatcmpl-<uuidv7>","object":"chat.completion.chunk","created":<created>,"model":"assistant","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}],"usage":null}
+
+data: {"id":"chatcmpl-<uuidv7>","object":"chat.completion.chunk","created":<created>,"model":"assistant","choices":[],"usage":{"prompt_tokens":<tokens>,"completion_tokens":<tokens>,"total_tokens":<tokens>}}
+
+data: [DONE]

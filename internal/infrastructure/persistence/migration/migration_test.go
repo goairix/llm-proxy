@@ -102,7 +102,20 @@ func assertModelColumnType(t *testing.T, db *gorm.DB, model any, name, want stri
 	}
 	for _, column := range columns {
 		if column.Name() == name {
-			if got := strings.ToLower(column.DatabaseTypeName()); got != want {
+			got := strings.ToLower(column.DatabaseTypeName())
+			if got == "timestamp" && strings.HasPrefix(want, "timestamp ") {
+				statement := &gorm.Statement{DB: db}
+				if err := statement.Parse(model); err != nil {
+					t.Fatalf("parse model table: %v", err)
+				}
+				if err := db.Raw(
+					`SELECT data_type FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = ? AND column_name = ?`,
+					statement.Schema.Table, name,
+				).Scan(&got).Error; err != nil {
+					t.Fatalf("read exact column type: %v", err)
+				}
+			}
+			if got != want {
 				t.Fatalf("column %s type = %q; want %q", name, got, want)
 			}
 			return
