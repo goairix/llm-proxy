@@ -33,4 +33,3 @@ data: {"type":"response.output_item.done","sequence_number":10,"output_index":1,
 
 event: response.completed
 data: {"type":"response.completed","sequence_number":11,"response":{"id":"resp_upstream","status":"completed","output":[{"type":"function_call","call_id":"call_one","name":"weather","arguments":"{\"city\":\"Shanghai\"}"}],"usage":{"input_tokens":20,"output_tokens":8,"total_tokens":28,"input_tokens_details":{"cached_tokens":4},"output_tokens_details":{"reasoning_tokens":3}}}}
-
