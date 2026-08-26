@@ -49,12 +49,14 @@ type UpdateVirtualKey struct {
 type CreateProvider struct {
 	Name          string
 	ConnectorType string
+	BaseURL       string
 }
 
 type UpdateProvider struct {
-	ID     uuid.UUID
-	Name   *string
-	Status *sharedmodel.Status
+	ID      uuid.UUID
+	Name    *string
+	BaseURL *string
+	Status  *sharedmodel.Status
 }
 
 type CreateProviderCredential struct {
@@ -70,21 +72,21 @@ type UpdateProviderCredential struct {
 }
 
 type CreateDeployment struct {
-	ProviderID    uuid.UUID
-	CredentialID  *uuid.UUID
-	Name          string
-	UpstreamModel string
-	ConnectorType string
-	Scope         catalogmodel.Scope
-	Capabilities  catalogmodel.CapabilitySet
+	ProviderID       uuid.UUID
+	Name             string
+	UpstreamModel    string
+	UpstreamProtocol catalogmodel.UpstreamProtocol
+	Scope            catalogmodel.Scope
+	Capabilities     catalogmodel.CapabilitySet
 }
 
 type UpdateDeployment struct {
-	ID            uuid.UUID
-	Name          *string
-	UpstreamModel *string
-	Capabilities  *catalogmodel.CapabilitySet
-	Status        *sharedmodel.Status
+	ID               uuid.UUID
+	Name             *string
+	UpstreamModel    *string
+	UpstreamProtocol *catalogmodel.UpstreamProtocol
+	Capabilities     *catalogmodel.CapabilitySet
+	Status           *sharedmodel.Status
 }
 
 type CreateModelAlias struct {

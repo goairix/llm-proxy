@@ -1,8 +1,12 @@
 package service
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -54,7 +58,7 @@ func NewCatalogService(
 }
 
 func (s *CatalogService) CreateProvider(ctx context.Context, command dto.CreateProvider) (dto.ProviderResult, error) {
-	provider, err := catalogmodel.NewProvider(command.Name, command.ConnectorType)
+	provider, err := catalogmodel.NewProviderWithBaseURL(command.Name, command.ConnectorType, command.BaseURL)
 	if err != nil {
 		return dto.ProviderResult{}, mapApplicationError(err)
 	}
@@ -74,9 +78,6 @@ func (s *CatalogService) CreateProvider(ctx context.Context, command dto.CreateP
 }
 
 func (s *CatalogService) CreateProviderCredential(ctx context.Context, command dto.CreateProviderCredential) (dto.ProviderCredentialResult, error) {
-	if command.Scope.Kind != catalogmodel.ScopePlatform {
-		return dto.ProviderCredentialResult{}, controlerrors.New(controlerrors.InvalidRequest, "当前版本仅允许创建平台级供应商凭据", "scope", nil)
-	}
 	var credential *catalogmodel.ProviderCredential
 	var revision int64
 	err := s.mutate(ctx, func(txCtx context.Context) error {
@@ -89,6 +90,12 @@ func (s *CatalogService) CreateProviderCredential(ctx context.Context, command d
 		}
 		if provider.Status != sharedmodel.StatusActive {
 			return disabled("供应商")
+		}
+		if _, err := s.validateScope(txCtx, command.Scope); err != nil {
+			return err
+		}
+		if err := validateCredentialPayload(provider.ConnectorType, command.Credential); err != nil {
+			return err
 		}
 		identity, err := sharedmodel.NewEntity()
 		if err != nil {
@@ -117,7 +124,7 @@ func (s *CatalogService) CreateProviderCredential(ctx context.Context, command d
 func credentialResult(credential *catalogmodel.ProviderCredential, revision int64) dto.ProviderCredentialResult {
 	return dto.ProviderCredentialResult{
 		ID: credential.ID, ProviderID: credential.ProviderID, Scope: credential.Scope,
-		KeyVersion: credential.Sealed.KeyVersion, Status: credential.Status,
+		Status:    credential.Status,
 		CreatedAt: credential.CreatedAt, UpdatedAt: credential.UpdatedAt, Revision: revision,
 	}
 }
@@ -136,35 +143,14 @@ func (s *CatalogService) CreateDeployment(ctx context.Context, command dto.Creat
 		if provider.Status != sharedmodel.StatusActive {
 			return disabled("供应商")
 		}
-		if provider.ConnectorType != command.ConnectorType {
-			return controlerrors.New(controlerrors.InvalidRequest, "Deployment 的 Connector 类型与供应商不一致", "connector_type", nil)
+		if !provider.Supports(command.UpstreamProtocol) {
+			return controlerrors.New(controlerrors.InvalidRequest, "供应商不支持指定的上游协议", "upstream_protocol", nil)
 		}
-		scopeContext, err := s.validateScope(txCtx, command.Scope)
+		_, err = s.validateScope(txCtx, command.Scope)
 		if err != nil {
 			return err
 		}
-		if command.CredentialID == nil && command.ConnectorType != "fake" {
-			return controlerrors.New(controlerrors.InvalidRequest, "非 Fake Deployment 必须关联供应商凭据", "credential_id", nil)
-		}
-		if command.CredentialID != nil {
-			credential, err := s.credentials.FindByID(txCtx, *command.CredentialID)
-			if err != nil {
-				return err
-			}
-			if credential == nil {
-				return notFound("供应商凭据")
-			}
-			if credential.Status != sharedmodel.StatusActive {
-				return disabled("供应商凭据")
-			}
-			if credential.ProviderID != command.ProviderID {
-				return controlerrors.New(controlerrors.InvalidRequest, "供应商凭据不属于指定供应商", "credential_id", nil)
-			}
-			if !credentialScopeCovers(credential.Scope, command.Scope, scopeContext.organizationID) {
-				return controlerrors.New(controlerrors.PermissionDenied, "供应商凭据作用域不能用于该 Deployment", "credential_id", nil)
-			}
-		}
-		deployment, err = catalogmodel.NewDeployment(command.ProviderID, command.CredentialID, command.Name, command.UpstreamModel, command.ConnectorType, command.Scope, command.Capabilities)
+		deployment, err = catalogmodel.NewDeploymentWithProtocol(command.ProviderID, command.Name, command.UpstreamModel, command.UpstreamProtocol, command.Scope, command.Capabilities)
 		if err != nil {
 			return err
 		}
@@ -241,9 +227,6 @@ func (s *CatalogService) CreateRouteTarget(ctx context.Context, command dto.Crea
 		}
 		if deployment.Status != sharedmodel.StatusActive {
 			return disabled("Deployment")
-		}
-		if deployment.ConnectorType != "fake" {
-			return controlerrors.New(controlerrors.InvalidRequest, "当前版本 RouteTarget 只允许 Fake Deployment", "deployment_id", nil)
 		}
 		if !deploymentVisibleToProject(deployment.Scope, project.ID, project.OrganizationID) {
 			return controlerrors.New(controlerrors.PermissionDenied, "Deployment 对当前项目不可见", "deployment_id", nil)
@@ -348,19 +331,6 @@ func (s *CatalogService) activeProject(ctx context.Context, id uuid.UUID) (*tena
 	return project, nil
 }
 
-func credentialScopeCovers(credentialScope, deploymentScope catalogmodel.Scope, deploymentOrganizationID uuid.UUID) bool {
-	switch credentialScope.Kind {
-	case catalogmodel.ScopePlatform:
-		return true
-	case catalogmodel.ScopeOrganization:
-		return credentialScope.OrganizationID == deploymentOrganizationID
-	case catalogmodel.ScopeProject:
-		return deploymentScope.Kind == catalogmodel.ScopeProject && credentialScope.ProjectID == deploymentScope.ProjectID
-	default:
-		return false
-	}
-}
-
 func deploymentVisibleToProject(scope catalogmodel.Scope, projectID, organizationID uuid.UUID) bool {
 	switch scope.Kind {
 	case catalogmodel.ScopePlatform:
@@ -385,36 +355,11 @@ func (s *CatalogService) validateDeploymentAssociations(ctx context.Context, dep
 	if provider.Status != sharedmodel.StatusActive {
 		return disabled("供应商")
 	}
-	if provider.ConnectorType != deployment.ConnectorType {
-		return controlerrors.New(controlerrors.InvalidRequest, "Deployment 的 Connector 类型与供应商不一致", "connector_type", nil)
+	if !provider.Supports(deployment.UpstreamProtocol) {
+		return controlerrors.New(controlerrors.InvalidRequest, "供应商不支持指定的上游协议", "upstream_protocol", nil)
 	}
-	scopeContext, err := s.validateScope(ctx, deployment.Scope)
-	if err != nil {
-		return err
-	}
-	if deployment.CredentialID == nil {
-		if deployment.ConnectorType != "fake" {
-			return controlerrors.New(controlerrors.InvalidRequest, "非 Fake Deployment 必须关联供应商凭据", "credential_id", nil)
-		}
-		return nil
-	}
-	credential, err := s.credentials.FindByID(ctx, *deployment.CredentialID)
-	if err != nil {
-		return err
-	}
-	if credential == nil {
-		return notFound("供应商凭据")
-	}
-	if credential.Status != sharedmodel.StatusActive {
-		return disabled("供应商凭据")
-	}
-	if credential.ProviderID != deployment.ProviderID {
-		return controlerrors.New(controlerrors.InvalidRequest, "供应商凭据不属于指定供应商", "credential_id", nil)
-	}
-	if !credentialScopeCovers(credential.Scope, deployment.Scope, scopeContext.organizationID) {
-		return controlerrors.New(controlerrors.PermissionDenied, "供应商凭据作用域不能用于该 Deployment", "credential_id", nil)
-	}
-	return nil
+	_, err = s.validateScope(ctx, deployment.Scope)
+	return err
 }
 
 func (s *CatalogService) GetProvider(ctx context.Context, id uuid.UUID) (*catalogmodel.Provider, error) {
@@ -456,6 +401,11 @@ func (s *CatalogService) UpdateProvider(ctx context.Context, command dto.UpdateP
 		}
 		if command.Name != nil {
 			provider.Name = *command.Name
+		}
+		if command.BaseURL != nil {
+			if err := provider.SetBaseURL(*command.BaseURL); err != nil {
+				return err
+			}
 		}
 		if command.Status != nil {
 			provider.Status = *command.Status
@@ -518,16 +468,10 @@ func (s *CatalogService) UpdateProviderCredential(ctx context.Context, command d
 		if provider == nil {
 			return notFound("供应商")
 		}
-		if disabling(credential.Status, command.Status) {
-			referenced, err := s.deployments.HasActiveByCredential(txCtx, credential.ID)
-			if err != nil {
+		if len(command.Credential) > 0 {
+			if err := validateCredentialPayload(provider.ConnectorType, command.Credential); err != nil {
 				return err
 			}
-			if referenced {
-				return controlerrors.New(controlerrors.Conflict, "供应商凭据仍被启用的 Deployment 引用", "status", nil)
-			}
-		}
-		if len(command.Credential) > 0 {
 			sealed, err := s.credentialCipher.Seal(txCtx, credential.ID, credential.ProviderID, credential.Scope, command.Credential)
 			if err != nil {
 				return err
@@ -595,6 +539,9 @@ func (s *CatalogService) UpdateDeployment(ctx context.Context, command dto.Updat
 		}
 		if command.UpstreamModel != nil {
 			deployment.UpstreamModel = *command.UpstreamModel
+		}
+		if command.UpstreamProtocol != nil {
+			deployment.UpstreamProtocol = *command.UpstreamProtocol
 		}
 		if command.Capabilities != nil {
 			deployment.Capabilities = *command.Capabilities
@@ -782,9 +729,6 @@ func (s *CatalogService) UpdateRouteTarget(ctx context.Context, command dto.Upda
 			if deployment.Status != sharedmodel.StatusActive {
 				return disabled("Deployment")
 			}
-			if deployment.ConnectorType != "fake" {
-				return controlerrors.New(controlerrors.InvalidRequest, "当前版本 RouteTarget 只允许 Fake Deployment", "deployment_id", nil)
-			}
 			if !deploymentVisibleToProject(deployment.Scope, project.ID, project.OrganizationID) {
 				return controlerrors.New(controlerrors.PermissionDenied, "Deployment 对当前项目不可见", "deployment_id", nil)
 			}
@@ -833,13 +777,28 @@ func (s *CatalogService) validateAliasActivation(ctx context.Context, alias *cat
 	if deployment.Status != sharedmodel.StatusActive {
 		return disabled("Deployment")
 	}
-	if deployment.ConnectorType != "fake" {
-		return controlerrors.New(controlerrors.InvalidRequest, "当前版本 RouteTarget 只允许 Fake Deployment", "status", nil)
-	}
 	if !deploymentVisibleToProject(deployment.Scope, project.ID, project.OrganizationID) {
 		return controlerrors.New(controlerrors.PermissionDenied, "Deployment 对当前项目不可见", "status", nil)
 	}
 	return s.validateDeploymentAssociations(ctx, deployment)
+}
+
+func validateCredentialPayload(connectorType string, payload []byte) error {
+	if connectorType == catalogmodel.ConnectorFake {
+		return controlerrors.New(controlerrors.InvalidRequest, "Fake Provider 不接受供应商凭据", "credential", nil)
+	}
+	var value struct {
+		APIKey string `json:"api_key"`
+	}
+	decoder := json.NewDecoder(bytes.NewReader(payload))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&value); err != nil || strings.TrimSpace(value.APIKey) == "" {
+		return controlerrors.New(controlerrors.InvalidRequest, "credential 必须只包含非空 api_key", "credential", err)
+	}
+	if decoder.Decode(&struct{}{}) != io.EOF {
+		return controlerrors.New(controlerrors.InvalidRequest, "credential 只能包含一个 JSON 值", "credential", nil)
+	}
+	return nil
 }
 
 func disabling(current sharedmodel.Status, next *sharedmodel.Status) bool {

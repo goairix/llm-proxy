@@ -83,45 +83,44 @@ type providerView struct {
 	ID            uuid.UUID          `json:"id"`
 	Name          string             `json:"name"`
 	ConnectorType string             `json:"connector_type"`
+	BaseURL       string             `json:"base_url"`
 	Status        sharedmodel.Status `json:"status"`
 	CreatedAt     time.Time          `json:"created_at"`
 	UpdatedAt     time.Time          `json:"updated_at"`
 }
 
 func viewProvider(value catalogmodel.Provider) providerView {
-	return providerView{ID: value.ID, Name: value.Name, ConnectorType: value.ConnectorType, Status: value.Status, CreatedAt: value.CreatedAt, UpdatedAt: value.UpdatedAt}
+	return providerView{ID: value.ID, Name: value.Name, ConnectorType: value.ConnectorType, BaseURL: value.BaseURL, Status: value.Status, CreatedAt: value.CreatedAt, UpdatedAt: value.UpdatedAt}
 }
 
 type providerCredentialView struct {
 	ID         uuid.UUID          `json:"id"`
 	ProviderID uuid.UUID          `json:"provider_id"`
 	Scope      scopeView          `json:"scope"`
-	KeyVersion string             `json:"key_version"`
 	Status     sharedmodel.Status `json:"status"`
 	CreatedAt  time.Time          `json:"created_at"`
 	UpdatedAt  time.Time          `json:"updated_at"`
 }
 
 func viewProviderCredential(value dto.ProviderCredentialResult) providerCredentialView {
-	return providerCredentialView{ID: value.ID, ProviderID: value.ProviderID, Scope: viewScope(value.Scope), KeyVersion: value.KeyVersion, Status: value.Status, CreatedAt: value.CreatedAt, UpdatedAt: value.UpdatedAt}
+	return providerCredentialView{ID: value.ID, ProviderID: value.ProviderID, Scope: viewScope(value.Scope), Status: value.Status, CreatedAt: value.CreatedAt, UpdatedAt: value.UpdatedAt}
 }
 
 type deploymentView struct {
-	ID            uuid.UUID                  `json:"id"`
-	ProviderID    uuid.UUID                  `json:"provider_id"`
-	CredentialID  *uuid.UUID                 `json:"credential_id,omitempty"`
-	Name          string                     `json:"name"`
-	UpstreamModel string                     `json:"upstream_model"`
-	ConnectorType string                     `json:"connector_type"`
-	Scope         scopeView                  `json:"scope"`
-	Capabilities  catalogmodel.CapabilitySet `json:"capabilities"`
-	Status        sharedmodel.Status         `json:"status"`
-	CreatedAt     time.Time                  `json:"created_at"`
-	UpdatedAt     time.Time                  `json:"updated_at"`
+	ID               uuid.UUID                     `json:"id"`
+	ProviderID       uuid.UUID                     `json:"provider_id"`
+	Name             string                        `json:"name"`
+	UpstreamModel    string                        `json:"upstream_model"`
+	UpstreamProtocol catalogmodel.UpstreamProtocol `json:"upstream_protocol"`
+	Scope            scopeView                     `json:"scope"`
+	Capabilities     catalogmodel.CapabilitySet    `json:"capabilities"`
+	Status           sharedmodel.Status            `json:"status"`
+	CreatedAt        time.Time                     `json:"created_at"`
+	UpdatedAt        time.Time                     `json:"updated_at"`
 }
 
 func viewDeployment(value catalogmodel.Deployment) deploymentView {
-	return deploymentView{ID: value.ID, ProviderID: value.ProviderID, CredentialID: value.CredentialID, Name: value.Name, UpstreamModel: value.UpstreamModel, ConnectorType: value.ConnectorType, Scope: viewScope(value.Scope), Capabilities: value.Capabilities, Status: value.Status, CreatedAt: value.CreatedAt, UpdatedAt: value.UpdatedAt}
+	return deploymentView{ID: value.ID, ProviderID: value.ProviderID, Name: value.Name, UpstreamModel: value.UpstreamModel, UpstreamProtocol: value.UpstreamProtocol, Scope: viewScope(value.Scope), Capabilities: value.Capabilities, Status: value.Status, CreatedAt: value.CreatedAt, UpdatedAt: value.UpdatedAt}
 }
 
 type modelAliasView struct {

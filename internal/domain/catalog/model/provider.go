@@ -105,6 +105,19 @@ func (p Provider) Supports(protocol UpstreamProtocol) bool {
 	}
 }
 
+// SetBaseURL validates and normalizes mutable provider transport configuration.
+func (p *Provider) SetBaseURL(value string) error {
+	if p == nil {
+		return fmt.Errorf("%w: provider is required", sharederrors.ErrInvalid)
+	}
+	normalized, err := normalizeBaseURL(p.ConnectorType, value, false)
+	if err != nil {
+		return err
+	}
+	p.BaseURL = normalized
+	return nil
+}
+
 func normalizeBaseURL(connectorType, value string, legacy bool) (string, error) {
 	connectorType = strings.TrimSpace(connectorType)
 	value = strings.TrimSpace(value)

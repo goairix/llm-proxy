@@ -70,12 +70,13 @@ func (h *Handler) createProvider(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Name          string `json:"name"`
 		ConnectorType string `json:"connector_type"`
+		BaseURL       string `json:"base_url"`
 	}
 	if err := decodeJSON(w, r, &body); err != nil {
 		writeInputError(w, r, "请求体不是有效的 JSON")
 		return
 	}
-	result, err := h.dependencies.Catalog.CreateProvider(r.Context(), dto.CreateProvider{Name: body.Name, ConnectorType: body.ConnectorType})
+	result, err := h.dependencies.Catalog.CreateProvider(r.Context(), dto.CreateProvider{Name: body.Name, ConnectorType: body.ConnectorType, BaseURL: body.BaseURL})
 	if err != nil {
 		writeApplicationError(w, r, err)
 		return
@@ -122,14 +123,15 @@ func (h *Handler) updateProvider(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		Name   *string             `json:"name"`
-		Status *sharedmodel.Status `json:"status"`
+		Name    *string             `json:"name"`
+		BaseURL *string             `json:"base_url"`
+		Status  *sharedmodel.Status `json:"status"`
 	}
 	if err := decodeJSON(w, r, &body); err != nil {
 		writeInputError(w, r, "请求体不是有效的 JSON")
 		return
 	}
-	result, err := h.dependencies.Catalog.UpdateProvider(r.Context(), dto.UpdateProvider{ID: id, Name: body.Name, Status: body.Status})
+	result, err := h.dependencies.Catalog.UpdateProvider(r.Context(), dto.UpdateProvider{ID: id, Name: body.Name, BaseURL: body.BaseURL, Status: body.Status})
 	if err != nil {
 		writeApplicationError(w, r, err)
 		return
@@ -224,22 +226,20 @@ func (h *Handler) updateProviderCredential(w http.ResponseWriter, r *http.Reques
 
 func (h *Handler) createDeployment(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		ProviderID    uuid.UUID                  `json:"provider_id"`
-		CredentialID  *uuid.UUID                 `json:"credential_id"`
-		Name          string                     `json:"name"`
-		UpstreamModel string                     `json:"upstream_model"`
-		ConnectorType string                     `json:"connector_type"`
-		Scope         scopePayload               `json:"scope"`
-		Capabilities  catalogmodel.CapabilitySet `json:"capabilities"`
+		ProviderID       uuid.UUID                     `json:"provider_id"`
+		Name             string                        `json:"name"`
+		UpstreamModel    string                        `json:"upstream_model"`
+		UpstreamProtocol catalogmodel.UpstreamProtocol `json:"upstream_protocol"`
+		Scope            scopePayload                  `json:"scope"`
+		Capabilities     catalogmodel.CapabilitySet    `json:"capabilities"`
 	}
 	if err := decodeJSON(w, r, &body); err != nil {
 		writeInputError(w, r, "请求体不是有效的 JSON")
 		return
 	}
 	result, err := h.dependencies.Catalog.CreateDeployment(r.Context(), dto.CreateDeployment{
-		ProviderID: body.ProviderID, CredentialID: body.CredentialID, Name: body.Name,
-		UpstreamModel: body.UpstreamModel, ConnectorType: body.ConnectorType,
-		Scope: body.Scope.domain(), Capabilities: body.Capabilities,
+		ProviderID: body.ProviderID, Name: body.Name, UpstreamModel: body.UpstreamModel,
+		UpstreamProtocol: body.UpstreamProtocol, Scope: body.Scope.domain(), Capabilities: body.Capabilities,
 	})
 	if err != nil {
 		writeApplicationError(w, r, err)
@@ -287,16 +287,20 @@ func (h *Handler) updateDeployment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		Name          *string                     `json:"name"`
-		UpstreamModel *string                     `json:"upstream_model"`
-		Capabilities  *catalogmodel.CapabilitySet `json:"capabilities"`
-		Status        *sharedmodel.Status         `json:"status"`
+		Name             *string                        `json:"name"`
+		UpstreamModel    *string                        `json:"upstream_model"`
+		UpstreamProtocol *catalogmodel.UpstreamProtocol `json:"upstream_protocol"`
+		Capabilities     *catalogmodel.CapabilitySet    `json:"capabilities"`
+		Status           *sharedmodel.Status            `json:"status"`
 	}
 	if err := decodeJSON(w, r, &body); err != nil {
 		writeInputError(w, r, "请求体不是有效的 JSON")
 		return
 	}
-	result, err := h.dependencies.Catalog.UpdateDeployment(r.Context(), dto.UpdateDeployment{ID: id, Name: body.Name, UpstreamModel: body.UpstreamModel, Capabilities: body.Capabilities, Status: body.Status})
+	result, err := h.dependencies.Catalog.UpdateDeployment(r.Context(), dto.UpdateDeployment{
+		ID: id, Name: body.Name, UpstreamModel: body.UpstreamModel, UpstreamProtocol: body.UpstreamProtocol,
+		Capabilities: body.Capabilities, Status: body.Status,
+	})
 	if err != nil {
 		writeApplicationError(w, r, err)
 		return
