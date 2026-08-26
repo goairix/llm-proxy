@@ -90,6 +90,60 @@ func TestCatalogConstructorsUseUUIDv7(t *testing.T) {
 	}
 }
 
+func TestProviderNormalizesBaseURLAndSupportsProtocols(t *testing.T) {
+	provider, err := NewProviderWithBaseURL("OpenAI", ConnectorOpenAI, "https://api.openai.com/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if provider.BaseURL != "https://api.openai.com" {
+		t.Fatalf("BaseURL = %q; want normalized URL", provider.BaseURL)
+	}
+	if !provider.Supports(UpstreamResponses) || !provider.Supports(UpstreamChatCompletions) || provider.Supports(UpstreamFake) {
+		t.Fatalf("unexpected protocol support for %+v", provider)
+	}
+}
+
+func TestProviderRejectsUnsafeBaseURL(t *testing.T) {
+	for _, value := range []string{
+		"",
+		"api.openai.com",
+		"ftp://api.openai.com",
+		"https://u:p@api.openai.com",
+		"https://api.openai.com?q=1",
+		"https://api.openai.com#x",
+	} {
+		t.Run(value, func(t *testing.T) {
+			if _, err := NewProviderWithBaseURL("OpenAI", ConnectorOpenAI, value); err == nil {
+				t.Fatalf("BaseURL %q accepted", value)
+			}
+		})
+	}
+}
+
+func TestFakeProviderRejectsBaseURL(t *testing.T) {
+	if _, err := NewProviderWithBaseURL("Fake", ConnectorFake, "https://example.invalid"); err == nil {
+		t.Fatal("Fake provider accepted BaseURL")
+	}
+}
+
+func TestDeploymentOwnsProtocolButNotProviderTransportConfiguration(t *testing.T) {
+	providerID := uuid.Must(uuid.NewV7())
+	deployment, err := NewDeploymentWithProtocol(
+		providerID,
+		"gpt-5",
+		"gpt-5",
+		UpstreamResponses,
+		Scope{Kind: ScopePlatform},
+		CapabilitySet{Text: true, Streaming: true},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if deployment.ProviderID != providerID || deployment.UpstreamProtocol != UpstreamResponses {
+		t.Fatalf("deployment = %+v", deployment)
+	}
+}
+
 func TestNewModelAliasStartsDisabledUntilRouteIsPrepared(t *testing.T) {
 	alias, err := NewModelAlias(uuid.Must(uuid.NewV7()), "assistant")
 	if err != nil {
