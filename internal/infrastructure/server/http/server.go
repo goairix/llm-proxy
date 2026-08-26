@@ -33,9 +33,14 @@ func (s *Server) Start() error {
 	return s.httpServer.ListenAndServe()
 }
 
+// MarkNotReady removes the server from readiness before other shutdown work begins.
+func (s *Server) MarkNotReady() {
+	s.readiness.SetReady(false)
+}
+
 // Shutdown marks the server not ready and gracefully stops it with a 10-second timeout.
 func (s *Server) Shutdown(ctx context.Context) error {
-	s.readiness.SetReady(false)
+	s.MarkNotReady()
 	shutdownCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	s.logger.Info("server shutting down")

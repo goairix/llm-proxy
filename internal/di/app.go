@@ -1,6 +1,7 @@
 package di
 
 import (
+	"github.com/goairix/llm-proxy/internal/di/provider"
 	"github.com/goairix/llm-proxy/internal/infrastructure/observability"
 	httpserver "github.com/goairix/llm-proxy/internal/infrastructure/server/http"
 	"go.uber.org/zap"
@@ -11,4 +12,5 @@ type App struct {
 	Server    *httpserver.Server
 	Telemetry *observability.Runtime
 	Logger    *zap.Logger
+	Gateway   *provider.GatewayRuntime
 }

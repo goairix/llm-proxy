@@ -60,3 +60,43 @@ func TestLayerDependencies(t *testing.T) {
 		t.Fatalf("walk internal packages: %v", err)
 	}
 }
+
+func TestUnifiedGatewayDependencyBoundaries(t *testing.T) {
+	assertPackageDoesNotImport(t, "../domain/inference", "/internal/interfaces/http/protocol/", "/internal/infrastructure/snapshot/")
+	assertPackageDoesNotImport(t, "../interfaces/http/protocol/openai", "/internal/interfaces/http/protocol/anthropic/")
+	assertPackageDoesNotImport(t, "../interfaces/http/protocol/anthropic", "/internal/interfaces/http/protocol/openai/")
+	assertPackageDoesNotImport(t, "../infrastructure/connector", "/internal/interfaces/")
+	assertPackageDoesNotImport(t, "../infrastructure/proxy", "/internal/interfaces/http/protocol/")
+	assertPackageDoesNotImport(t, "../application/gateway", "gorm.io/", "github.com/jackc/pgx", "/internal/infrastructure/persistence/")
+}
+
+func assertPackageDoesNotImport(t *testing.T, root string, forbidden ...string) {
+	t.Helper()
+	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		file, err := parser.ParseFile(token.NewFileSet(), path, nil, parser.ImportsOnly)
+		if err != nil {
+			return err
+		}
+		for _, spec := range file.Imports {
+			imported, err := strconv.Unquote(spec.Path.Value)
+			if err != nil {
+				return err
+			}
+			for _, fragment := range forbidden {
+				if strings.Contains("/"+imported+"/", fragment) {
+					t.Errorf("%s imports forbidden package %s", filepath.ToSlash(path), imported)
+				}
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk %s: %v", root, err)
+	}
+}

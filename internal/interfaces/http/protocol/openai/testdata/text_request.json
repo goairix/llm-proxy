@@ -1,0 +1,11 @@
+{
+  "model": "assistant",
+  "messages": [
+    {"role": "system", "content": "Be concise."},
+    {"role": "developer", "content": "Use Chinese."},
+    {"role": "user", "content": "hello"}
+  ],
+  "temperature": 0,
+  "stream": false,
+  "unknown_client_field": {"must_not": "pass through"}
+}

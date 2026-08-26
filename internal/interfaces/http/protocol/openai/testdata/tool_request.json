@@ -1,0 +1,22 @@
+{
+  "model": "assistant",
+  "messages": [
+    {"role": "user", "content": "weather"},
+    {
+      "role": "assistant",
+      "content": null,
+      "tool_calls": [
+        {"id": "call_1", "type": "function", "function": {"name": "weather", "arguments": "{\"city\":\"Shanghai\"}"}}
+      ]
+    },
+    {"role": "tool", "tool_call_id": "call_1", "content": "{\"temperature\":30}"}
+  ],
+  "tools": [
+    {"type": "function", "function": {"name": "weather", "description": "Get weather", "parameters": {"type": "object"}, "strict": true}}
+  ],
+  "tool_choice": {"type": "function", "function": {"name": "weather"}},
+  "response_format": {
+    "type": "json_schema",
+    "json_schema": {"name": "answer", "description": "Answer", "strict": true, "schema": {"type": "object"}}
+  }
+}

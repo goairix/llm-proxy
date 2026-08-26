@@ -21,3 +21,15 @@ func TestShutdownMarksServerNotReady(t *testing.T) {
 		t.Fatal("server remained ready after shutdown")
 	}
 }
+
+func TestMarkNotReady(t *testing.T) {
+	readiness := appRuntime.NewReadiness()
+	readiness.SetReady(true)
+	server := New(":0", http.NotFoundHandler(), zap.NewNop(), readiness)
+
+	server.MarkNotReady()
+
+	if readiness.Ready() {
+		t.Fatal("server remained ready")
+	}
+}

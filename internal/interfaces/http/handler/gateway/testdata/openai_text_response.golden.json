@@ -1,0 +1,1 @@
+{"id":"chatcmpl-<uuidv7>","object":"chat.completion","created":<created>,"model":"assistant","choices":[{"index":0,"message":{"role":"assistant","content":"回显: hello"},"finish_reason":"stop"}],"usage":{"prompt_tokens":<tokens>,"completion_tokens":<tokens>,"total_tokens":<tokens>}}

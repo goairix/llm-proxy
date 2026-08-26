@@ -52,10 +52,17 @@ func NewRootHandler(
 	observers appRuntime.UsageObserverFactory,
 	openAI OpenAIHandler,
 	anthropic AnthropicHandler,
+	gateway *UnifiedGatewayHandlers,
+	controlPlane *ControlPlaneRuntime,
 ) RootHandler {
 	baseURL := cfg.Server.ShowBaseURL
 	if baseURL == "" {
 		baseURL = fmt.Sprintf("http://localhost:%d", cfg.Server.Port)
+	}
+	var openAIGateway, anthropicGateway http.Handler
+	if gateway != nil {
+		openAIGateway = gateway.OpenAI
+		anthropicGateway = gateway.Anthropic
 	}
 	handler := router.New(router.Config{
 		BaseURL:   baseURL,
@@ -63,13 +70,17 @@ func NewRootHandler(
 		RateLimit: toMiddlewareRateLimit(cfg.RateLimit),
 		RateView:  toDashboardRateLimit(cfg.RateLimit),
 	}, router.Dependencies{
-		Logger:          logger,
-		Instrumenter:    telemetry,
-		Readiness:       readiness,
-		Stats:           stats,
-		ObserverFactory: observers,
-		OpenAIProxy:     openAI.Handler,
-		AnthropicProxy:  anthropic.Handler,
+		Logger:           logger,
+		Instrumenter:     telemetry,
+		Readiness:        readiness,
+		Stats:            stats,
+		ObserverFactory:  observers,
+		OpenAIProxy:      openAI.Handler,
+		AnthropicProxy:   anthropic.Handler,
+		OpenAIGateway:    openAIGateway,
+		AnthropicGateway: anthropicGateway,
+		ControlPlane:     controlPlane.Handler,
+		ControlAuth:      controlPlane.Authorizer,
 	})
 	return RootHandler{Handler: handler}
 }

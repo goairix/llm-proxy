@@ -1,0 +1,12 @@
+{
+  "model": "assistant",
+  "max_tokens": 128,
+  "messages": [
+    {"role": "user", "content": "weather"},
+    {"role": "assistant", "content": [{"type": "tool_use", "id": "toolu_1", "name": "weather", "input": {"city": "Shanghai"}}]},
+    {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_1", "content": "30", "is_error": false}]}
+  ],
+  "tools": [{"name": "weather", "description": "Get weather", "input_schema": {"type": "object"}, "strict": true}],
+  "tool_choice": {"type": "tool", "name": "weather"},
+  "output_config": {"format": {"type": "json_schema", "schema": {"type": "object"}}}
+}
