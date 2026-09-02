@@ -4,7 +4,7 @@
 
 本文定义多厂商统一网关 Phase 1C 的 Anthropic 原生上游接入。在现有多租户控制面、不可变运行时快照、平台凭据池、统一推理模型、OpenAI/OpenAI-Compatible Connector，以及 OpenAI Chat Completions、OpenAI Responses、Anthropic Messages 三个数据面入口之上，新增原生 Anthropic Messages Connector。
 
-本阶段只实现现有统一推理模型能够无损表达的 Anthropic 能力。Prompt Caching 的请求控制语义和 Extended Thinking 明确留到下一轮设计，不在本阶段做字段透传或静默降级。
+本阶段只实现现有统一推理模型能够稳定表达的 Anthropic 核心能力。Developer 指令层级和图片 Detail 等没有 Anthropic 对等字段的提示按本文明确规则规范化；Prompt Caching 的请求控制语义和 Extended Thinking 留到下一轮设计，不在本阶段做字段透传或静默降级。
 
 本文继承并细化：
 
@@ -24,7 +24,8 @@
 - 首版支持文本、图片、工具调用与结果、结构化输出、Usage、普通响应和 SSE。
 - 首版不启用 Prompt Caching 请求控制、Extended Thinking、服务端工具、Citations 或其他 Anthropic 私有扩展。
 - 请求侧不启用统一模型无法表达的能力；响应中出现未知内容块时安全失败，不忽略、不转成文本。
-- `ping` 和未来新增且不携带业务语义的未知顶层 SSE 事件可以忽略。
+- 不根据 `upstream_model` 字符串猜测模型能力，也不自动发送 `thinking.type=disabled`。默认或强制产生 Thinking Block 的模型在本阶段不兼容，直到统一 Thinking 语义完成。
+- `ping` 和未来新增的未知顶层 SSE 事件按 Anthropic 版本策略忽略；已知内容事件中的未知 Block 或 Delta 仍安全失败。
 - 凭据继续由平台控制面管理，复用 Platform、Organization、Project 三级加密凭据池；租户感知不到上游凭据。
 - 凭据明文格式继续严格限制为只包含非空 `api_key` 的 JSON 对象。
 - Connector 使用标准库 `net/http`，不引入 Anthropic SDK。
@@ -42,6 +43,7 @@
 - 加密 `api_key` 凭据打开和 `x-api-key` 鉴权。
 - 固定 `anthropic-version: 2023-06-01`。
 - `/v1/messages` 请求编解码和安全 URL 拼接。
+- Anthropic 必填参数和统一模型可映射子集的前置校验。
 - Anthropic Messages 普通响应到统一 Response 的映射。
 - Anthropic Messages SSE 到统一 Event 的增量映射。
 - 三个客户端入口到 Anthropic 上游的普通与流式纵向测试。
@@ -53,6 +55,7 @@
 - Extended Thinking、Adaptive Thinking、thinking/signature/redacted-thinking 内容块。
 - Anthropic 服务端工具、Citations、Documents、Files API、Batch API 或 Token Counting API。
 - Anthropic Beta Header 或可配置 API 版本。
+- 默认或强制开启 Thinking 的模型兼容保证。
 - Amazon Bedrock、Google Vertex AI 或 Microsoft Foundry 的 Anthropic 接入。
 - 任意自定义 Header、请求路径、鉴权模板或厂商脚本。
 - ProviderEndpoint、多 BaseURL、权重、优先级或健康状态。
@@ -176,13 +179,17 @@ anthropic-version: 2023-06-01
 ### 7.1 模型与生成参数
 
 - `model` 使用 Deployment 的 `upstream_model`。
-- `max_tokens` 使用统一 Request 的 MaxTokens；若调用路径缺失该值，沿用 Gateway 已有的能力与请求校验，不在 Connector 猜测默认值。
-- `temperature`、`top_p`、停止序列按统一 Optional 语义映射。
+- Anthropic Messages 要求 `max_tokens`。统一 Request 必须显式提供大于零的 MaxTokens；缺失或为零时在网络调用前返回 `ParameterUnsupported("max_tokens")`，不得猜测平台默认值。
+- `temperature` 仅接受 Anthropic 可表达的 0 到 1；统一 Request 中大于 1 的值返回 `ParameterUnsupported("temperature")`。
+- `top_p` 和停止序列按统一 Optional 语义映射。
 - `stream` 由 Connector 方法决定，必须与 Invocation.Request.Stream 一致。
+- Connector 不按模型名自动改写 Temperature、Thinking 或 Effort；模型特有约束由上游 4xx 进入稳定的 `UpstreamRequestRejected`。
 
-### 7.2 System 与消息
+### 7.2 System、Developer 与消息
 
-- 统一 System 消息提取到 Anthropic 顶层 `system`。
+- 请求只允许在首个 User/Assistant 消息之前出现 System 或 Developer 消息。
+- 所有前导 System/Developer 文本块保持顺序，映射为 Anthropic 顶层 `system` 文本块数组；Anthropic 没有独立 Developer Role，因此两者在该上游使用相同指令层级。
+- 首个 User/Assistant 消息之后再次出现 System 或 Developer 时，返回 `ParameterUnsupported("messages")`，不得重排到请求顶部。
 - User 和 Assistant 消息映射到 `messages`。
 - 保持消息和内容块顺序。
 - 不把系统提示、普通消息或工具结果拼接成不可逆字符串。
@@ -194,7 +201,9 @@ anthropic-version: 2023-06-01
 - Base64 Image -> `image` + `source.type=base64`。
 - URL Image -> `image` + `source.type=url`。
 - ToolCall -> Assistant `tool_use`。
-- ToolResult -> User `tool_result`，保留 `tool_use_id` 和 `is_error`。
+- ToolResult -> User `tool_result`，保留 `tool_use_id` 和 `is_error`；统一 JSON ToolResult 使用紧凑 JSON 文本作为 Anthropic `content`，不把 JSON Object 塞入只接受文本或内容块数组的位置。
+
+Anthropic 要求 User 消息中的 ToolResult 位于其他内容之前。若统一 User 消息中 ToolResult 出现在 Text/Image 之后，Connector 返回 `ParameterUnsupported("messages")`，不得静默重排。
 
 OpenAI 风格图片 Detail 在 Anthropic 没有等价字段；它作为非语义质量提示不发送给 Anthropic，图片数据本身必须完整保留。
 
@@ -202,8 +211,9 @@ OpenAI 风格图片 Detail 在 Anthropic 没有等价字段；它作为非语义
 
 - 工具映射为 `name`、`description`、`input_schema`。
 - ToolChoice `auto`、`none`、`required`、`specific` 分别映射到 Anthropic `auto`、禁用工具、`any`、`tool`。
-- Strict 只在 Anthropic 当前标准字段存在等价语义时发送；不能用私有 Prompt 模拟。
-- 结构化输出使用 `output_config.format` 和统一 JSON Schema，不使用已废弃的 `output_format`。
+- Tool.Strict 直接映射为 Anthropic 标准 `strict`；不能用私有 Prompt 模拟。
+- `StructuredJSONSchema` 使用 `output_config.format` 和统一 JSON Schema，不使用已废弃的 `output_format`。
+- Anthropic 没有无 Schema 的 `json_object` 等价语义；`StructuredJSONObject` 返回 `ParameterUnsupported("response_format")`。
 
 ## 8. 普通响应映射
 
@@ -215,9 +225,9 @@ OpenAI 风格图片 Detail 在 Anthropic 没有等价字段；它作为非语义
 
 - Anthropic `text` -> 统一 Text。
 - Anthropic `tool_use` -> 统一 ToolCall，保留 ID、名称和完整 JSON Object 参数。
-- 其他内容块，包括 thinking、redacted-thinking、server tool、citation 或未知块 -> `invalid_upstream_response`。
+- 其他内容块，包括 thinking、redacted-thinking、server tool、citation 或未知块 -> `UpstreamInvalidResponse`。
 
-当 Anthropic 停止原因为 `refusal` 时，返回的文本块映射为统一 Refusal，而不是普通 Text，以便三个客户端协议使用各自稳定的拒绝语义编码。
+当 Anthropic 停止原因为 `refusal` 时，普通响应丢弃可能存在的未完成输出。若 `stop_details.explanation` 非空，则把它映射为唯一统一 Refusal 内容；否则返回无内容的 `StopContentFilter` 响应。`stop_details.category` 不向租户暴露。
 
 ### 8.3 停止原因
 
@@ -228,8 +238,9 @@ OpenAI 风格图片 Detail 在 Anthropic 没有等价字段；它作为非语义
 | `stop_sequence` | `stop_sequence` |
 | `tool_use` | `tool_use` |
 | `refusal` | `content_filter` |
+| `model_context_window_exceeded` | `max_tokens` |
 
-未知停止原因安全失败，不能猜测为 `end_turn`。
+`pause_turn` 只服务于本阶段未启用的服务端工具，因此按 `UpstreamInvalidResponse` 处理。其他未知停止原因也安全失败，不能猜测为 `end_turn`。
 
 ### 8.4 Usage
 
@@ -247,11 +258,11 @@ OpenAI 风格图片 Detail 在 Anthropic 没有等价字段；它作为非语义
 Anthropic 标准序列映射为：
 
 ```text
-message_start       -> ResponseStart + initial UsageUpdate
+message_start       -> ResponseStart + initial presence-aware UsageUpdate
 content_block_start -> ContentBlockStart or ToolCallStart
 content_block_delta -> TextDelta or ToolArgumentsDelta
 content_block_stop  -> ContentBlockStop
-message_delta       -> cache StopReason + cumulative UsageUpdate
+message_delta       -> cache StopReason/StopDetails + presence-aware cumulative UsageUpdate
 message_stop        -> ResponseFinish
 ```
 
@@ -269,14 +280,25 @@ message_stop        -> ResponseFinish
 
 Anthropic `message_delta.usage` 是累计值。Connector 用新值覆盖对应累计字段，再产生统一 UsageUpdate；禁止把多个事件的 Token 数相加。任何字段回退都视为非法事件序列。
 
-### 9.4 可忽略与不可忽略事件
+Usage DTO 必须保留字段是否出现：`message_start` 初始化 Input、Output 和缓存字段；后续 `message_delta` 只覆盖 JSON 中实际出现的字段，省略字段沿用前值。不得因为 Delta 只包含 `output_tokens` 就把 Input 或缓存字段清零。
+
+### 9.4 Refusal
+
+流式 Refusal 只会在 `message_delta` 才确定，之前的 Text Delta 已经 Flush，无法撤回。Connector 采用以下确定规则：
+
+- 保留已经发送的 Text 事件，但最终 StopReason 必须是 `StopContentFilter`；三个入口客户端必须据此把先前内容视为不完整。
+- 若 `stop_details.explanation` 非空，在所有上游内容块关闭后追加一个统一 Refusal Block，再产生 `ResponseFinish`。
+- 若 Refusal 在任何输出前发生且 explanation 为空，则直接以无内容的 `StopContentFilter` 结束。
+- 不缓存完整 SSE 来等待 StopReason，也不尝试在已发送事件上回写内容类型。
+
+### 9.5 可忽略与不可忽略事件
 
 - `ping` 可忽略。
-- 未来新增且没有内容、错误、Usage、停止或路由语义的未知顶层事件可忽略。
-- 未知内容块、内容 Delta、错误事件或改变完成语义的顶层事件不能忽略，必须安全终止。
+- 未来新增的未知顶层事件可忽略，但仍受单事件大小限制。
+- 已知 `content_block_start`/`content_block_delta` 中的未知内容类型不能忽略，必须安全终止。
 - 上游 `error` 事件产生统一 StreamError，消息使用稳定安全文本，不包含原始错误正文。
 
-### 9.5 流生命周期
+### 9.6 流生命周期
 
 - SSE Reader 支持任意网络分块、CRLF、多行 `data:` 和无尾随空行。
 - 第一个有效统一事件到达后立即交给入口 Encoder Flush，不缓存完整响应。
@@ -291,8 +313,8 @@ Anthropic `message_delta.usage` 是累计值。Connector 用新值覆盖对应�
 
 1. Connector 不忽略内容块。
 2. Connector 不把未知内容转成 Text。
-3. Connector 返回 `invalid_upstream_response` 或安全 StreamError。
-4. 原始内容只允许留在受控内部 Cause 中；不得进入租户响应、普通日志、Trace 或 Metrics。
+3. Connector 返回 `UpstreamInvalidResponse` 或安全 StreamError。
+4. 内部 Cause 只记录内容类型、事件类型和 Index 等结构信息，禁止携带未知内容正文、Thinking、Signature 或上游原始错误体。
 
 该规则避免内容缺失、工具关联损坏、思考内容泄露和不同客户端协议产生不一致响应。
 
@@ -354,6 +376,8 @@ endpoint = messages
 
 插桩 URL 使用脱敏静态路径，底层请求发送前再恢复真实 Provider URL。禁止在 span、metrics 或日志中记录 Prompt、输出、API Key、真实 BaseURL、UpstreamModel、原始动态路径、资源 ID 或 Query。
 
+现有 `normalizeGatewayProvider` 必须加入 `anthropic`，`normalizeGatewayEndpoint` 必须加入 `messages`；测试要证明 OTel 看到的 URL 为静态 `/anthropic/messages`，而底层 Transport 收到真实 Provider URL。
+
 ## 14. 持久化与迁移
 
 当前 Provider Connector 类型和 Deployment 上游协议均以 `varchar` 普通字符串持久化，数据库没有写死旧枚举约束，因此本阶段不新增表、字段或迁移。持久化测试仍须覆盖新值的逐字段往返，防止 Repository 或 Mapper 引入隐式白名单。
@@ -392,9 +416,10 @@ endpoint = messages
 
 - 请求路径、方法、固定 Header、上游模型和鉴权。
 - System、消息、文本、图片、工具和结构化输出编码。
+- Developer/System 前导规则、ToolResult 顺序、缺失 MaxTokens、Temperature 上界和 `json_object` 拒绝。
 - 普通 Text、ToolUse、Refusal、停止原因和 Usage 解码。
-- SSE 文本与工具事件、累计 Usage 和终止顺序。
-- 任意分块、CRLF、多行 Data、Ping、未知无语义顶层事件和首事件及时到达。
+- SSE 文本与工具事件、字段存在性感知的累计 Usage、流式 Refusal 和终止顺序。
+- 任意分块、CRLF、多行 Data、Ping、未知顶层事件和首事件及时到达。
 - 未知内容块、未知 Delta、事件乱序、重复 Index、非法工具 JSON 和提前 EOF。
 - 4xx、429、5xx、529、非法 JSON、超限响应、空闲超时、取消和重定向。
 - API Key、原始错误体、BaseURL、UpstreamModel 和资源 ID 泄露检查。
@@ -437,12 +462,14 @@ endpoint = messages
 6. 三个客户端入口都能正确表达 Anthropic 工具调用结果。
 7. 图片、结构化输出、停止原因、Refusal 和 Usage 在统一模型能力范围内正确映射。
 8. SSE 首事件及时 Flush，取消和 Close 能终止上游读取。
-9. Unknown Content、Thinking、Server Tool 或 Citation 不被静默丢弃或转成普通文本。
+9. 未知内容、Thinking、服务端工具或 Citation 不被静默丢弃或转成普通文本。
 10. 原始错误体、API Key、BaseURL、UpstreamModel 和内部资源 ID 不进入租户响应或不允许的遥测字段。
 11. 无自动重试、换凭据、协议回退、多地址选择或 Anthropic Beta 功能。
 12. 数据库无外键、UUIDv7、时间类型和 PostgreSQL 时区约束保持不变。
 13. OpenAI、OpenAI-Compatible、Fake Connector 和透明代理无回归。
 14. 全量、Race、Vet、Wire、架构检查和构建通过。
+15. 缺失/零 MaxTokens、Temperature 大于 1、非前导 System/Developer、非法 ToolResult 顺序和 `json_object` 在访问上游前稳定失败。
+16. 默认或强制产生 Thinking Block 的模型明确返回不兼容错误，不静默丢弃 Thinking；该限制在下一轮 Extended Thinking 中解除。
 
 ## 18. 后续完善
 
@@ -463,3 +490,14 @@ endpoint = messages
 - 定义多轮工具调用时 thinking/signature 的完整保留规则。
 
 在这两项之前，也可以独立接入 Gemini 原生 Connector；它继续复用统一 Gateway、Snapshot、凭据池和安全 Transport，不影响本设计的 Anthropic Deployment 语义。
+
+## 19. 官方协议依据
+
+本设计复审核对以下 Anthropic 官方资料：
+
+- [Messages API](https://platform.claude.com/docs/en/api/messages/create)
+- [Streaming Messages](https://platform.claude.com/docs/en/build-with-claude/streaming)
+- [Structured Outputs](https://platform.claude.com/docs/en/build-with-claude/structured-outputs)
+- [Stop Reasons](https://platform.claude.com/docs/en/build-with-claude/handling-stop-reasons)
+- [Refusals and Fallback](https://platform.claude.com/docs/en/build-with-claude/refusals-and-fallback)
+- [Extended Thinking](https://platform.claude.com/docs/en/docs/build-with-claude/extended-thinking)
