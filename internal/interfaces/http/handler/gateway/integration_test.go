@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -311,6 +312,131 @@ func TestIntegrationUnifiedGatewayThroughPostgresAndBothProtocols(t *testing.T) 
 	}
 
 	assertStreamErrorUsesProtocolEnvelope(t, runtime.Store(), virtualKey.Secret)
+}
+
+func TestIntegrationAnthropicProviderThroughPostgresAndAllClientProtocols(t *testing.T) {
+	cfg := openGatewayIntegrationConfig(t)
+	upstreamRequests := make(chan anthropicUpstreamRequest, 6)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		body, _ := io.ReadAll(request.Body)
+		var decoded struct {
+			Model     string `json:"model"`
+			MaxTokens int    `json:"max_tokens"`
+			Stream    bool   `json:"stream"`
+		}
+		decodeErr := json.Unmarshal(body, &decoded)
+		upstreamRequests <- anthropicUpstreamRequest{
+			Path: request.URL.Path, Authorization: request.Header.Get("Authorization"),
+			APIKey: request.Header.Get("x-api-key"), APIVersion: request.Header.Get("anthropic-version"),
+			Body: string(body), Model: decoded.Model, MaxTokens: decoded.MaxTokens, Stream: decoded.Stream, DecodeErr: decodeErr,
+		}
+		if decoded.Stream {
+			w.Header().Set("Content-Type", "text/event-stream")
+		} else {
+			w.Header().Set("Content-Type", "application/json")
+		}
+		_, _ = io.WriteString(w, providerUpstreamFixture(catalogmodel.UpstreamAnthropicMessages, decoded.Stream))
+	}))
+	t.Cleanup(upstream.Close)
+
+	logger := zap.NewNop()
+	runtime := provider.NewGatewayRuntime(cfg, logger)
+	cipherRuntime, err := provider.NewCredentialCipherRuntime(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	controlPlane, err := provider.NewControlPlaneRuntime(cfg, runtime, cipherRuntime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dataPlane, err := provider.NewUnifiedGatewayHandlers(cfg, runtime, cipherRuntime, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := router.New(router.Config{BaseURL: "http://localhost", Version: "integration"}, router.Dependencies{
+		Logger: logger, Instrumenter: integrationInstrumenter{}, Readiness: appRuntime.NewReadiness(),
+		Stats: &dashboard.Stats{}, ObserverFactory: tokenusage.NewObserver,
+		OpenAIProxy: http.NotFoundHandler(), AnthropicProxy: http.NotFoundHandler(),
+		OpenAIGateway: dataPlane.OpenAIChat, OpenAIResponsesGateway: dataPlane.OpenAIResponses, AnthropicGateway: dataPlane.Anthropic,
+		ControlPlane: controlPlane.Handler, ControlAuth: controlPlane.Authorizer,
+	})
+	server := httptest.NewServer(root)
+
+	runContext, cancelRun := context.WithCancel(context.Background())
+	runtime.Start(runContext)
+	t.Cleanup(func() {
+		server.Close()
+		cancelRun()
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = runtime.Stop(ctx)
+		_ = runtime.CloseDatabase()
+	})
+	waitForGatewayDatabase(t, runtime)
+
+	organization := controlPost(t, root, "/v1/organizations", `{"name":"Anthropic Integration"}`)
+	project := controlPost(t, root, "/v1/organizations/"+organization.ID.String()+"/projects", `{"name":"Production"}`)
+	virtualKey := controlPost(t, root, "/v1/projects/"+project.ID.String()+"/virtual-keys", `{"name":"anthropic-integration"}`)
+	providerResource := controlPost(t, root, "/v1/providers", fmt.Sprintf(
+		`{"name":"Anthropic","connector_type":"anthropic","base_url":%q}`, upstream.URL,
+	))
+	credential := controlPost(t, root, "/v1/provider-credentials", fmt.Sprintf(
+		`{"provider_id":%q,"scope":{"kind":"platform"},"credential":{"api_key":"integration-upstream-key"}}`, providerResource.ID,
+	))
+	deployment := controlPost(t, root, "/v1/deployments", fmt.Sprintf(
+		`{"provider_id":%q,"name":"claude","upstream_model":"claude-upstream","upstream_protocol":"anthropic_messages","scope":{"kind":"platform"},"capabilities":{"text":true,"image_input":true,"tools":true,"structured_output":true,"streaming":true}}`,
+		providerResource.ID,
+	))
+	modelAlias := controlPost(t, root, "/v1/model-aliases", fmt.Sprintf(`{"project_id":%q,"name":"assistant"}`, project.ID))
+	target := controlPost(t, root, "/v1/model-aliases/"+modelAlias.ID.String()+"/route-targets", fmt.Sprintf(
+		`{"deployment_id":%q,"priority":0,"weight":100}`, deployment.ID,
+	))
+	activated := controlPatch(t, root, "/v1/model-aliases/"+modelAlias.ID.String(), `{"status":"active"}`)
+	waitForGatewayRevision(t, runtime, activated.Revision)
+	if virtualKey.Secret == "" || credential.ID == uuid.Nil || target.ID == uuid.Nil {
+		t.Fatal("control plane did not persist the Anthropic route and platform credential")
+	}
+
+	for _, clientProtocol := range []string{"chat", "responses", "anthropic"} {
+		for _, stream := range []bool{false, true} {
+			t.Run(clientProtocol+"/"+strconv.FormatBool(stream), func(t *testing.T) {
+				path, body, anthropicClient := providerClientRequest(clientProtocol, stream)
+				var response gatewayHTTPResponse
+				if anthropicClient {
+					response = anthropicGatewayRequest(t, server.Client(), server.URL+path, virtualKey.Secret, body)
+				} else {
+					response = gatewayRequest(t, server.Client(), server.URL+path, virtualKey.Secret, body)
+				}
+				if response.StatusCode != http.StatusOK || !strings.Contains(response.Body, "assistant") || !strings.Contains(response.Body, "call_one") || !strings.Contains(response.Body, "11") || !strings.Contains(response.Body, "7") {
+					t.Fatalf("status=%d body=%s", response.StatusCode, response.Body)
+				}
+				for _, forbidden := range []string{"claude-upstream", "integration-upstream-key", upstream.URL} {
+					if strings.Contains(response.Body, forbidden) {
+						t.Fatalf("client response leaked %q: %s", forbidden, response.Body)
+					}
+				}
+				if stream && !strings.Contains(response.Body, "event:") && !strings.Contains(response.Body, "data:") {
+					t.Fatalf("stream body=%s", response.Body)
+				}
+
+				select {
+				case captured := <-upstreamRequests:
+					if captured.DecodeErr != nil || captured.Path != "/v1/messages" || captured.Authorization != "" || captured.APIKey != "integration-upstream-key" || captured.APIVersion != "2023-06-01" || captured.Model != "claude-upstream" || captured.MaxTokens <= 0 || captured.Stream != stream || strings.Contains(captured.Body, virtualKey.Secret) {
+						t.Fatalf("upstream request=%+v", captured)
+					}
+				case <-time.After(time.Second):
+					t.Fatal("Anthropic upstream request was not captured")
+				}
+			})
+		}
+	}
+}
+
+type anthropicUpstreamRequest struct {
+	Path, Authorization, APIKey, APIVersion, Body, Model string
+	Stream                                               bool
+	MaxTokens                                            int
+	DecodeErr                                            error
 }
 
 func openAIToolStreamRequest() string {
