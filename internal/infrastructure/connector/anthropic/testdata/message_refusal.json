@@ -1,0 +1,16 @@
+{
+  "id": "msg_refusal",
+  "type": "message",
+  "role": "assistant",
+  "model": "claude-upstream",
+  "content": [],
+  "stop_reason": "refusal",
+  "stop_details": {
+    "explanation": "无法处理该请求",
+    "category": "private-category"
+  },
+  "usage": {
+    "input_tokens": 5,
+    "output_tokens": 1
+  }
+}
