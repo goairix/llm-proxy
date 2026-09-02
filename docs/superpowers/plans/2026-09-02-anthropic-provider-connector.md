@@ -638,7 +638,7 @@ for _, message := range invocation.Request.Messages {
 
 `encodeMessage` 对 ToolResult 维护 `seenRegular`；ToolResult 在 Text/Image 后出现时返回 `ParameterUnsupported("messages")`。JSON ToolResult 使用 `json.Compact` 后作为字符串发送。
 
-ToolChoice 映射固定为：`auto -> {type:"auto"}`、`required -> {type:"any"}`、`specific -> {type:"tool",name:...}`；`none` 不发送 `tools` 和 `tool_choice`，不能生成 Anthropic 不支持的 `{type:"none"}`。Tool.Strict 映射为 Anthropic `strict`。结构化输出：
+ToolChoice 映射固定为：`auto -> {type:"auto"}`、`none -> {type:"none"}`、`required -> {type:"any"}`、`specific -> {type:"tool",name:...}`。Tool.Strict 映射为 Anthropic `strict`。结构化输出：
 
 ```go
 switch output.Type {
