@@ -63,6 +63,55 @@ func TestTransportForHidesProviderBaseURL(t *testing.T) {
 	}
 }
 
+func TestTransportForHidesAnthropicBaseURL(t *testing.T) {
+	runtime, spans, _ := newHTTPTestRuntime(t)
+	transport := runtime.TransportFor("anthropic", "messages", roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		if request.URL.String() != "https://private.internal/prefix/v1/messages" {
+			t.Fatalf("url=%s", request.URL)
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK, Header: make(http.Header),
+			Body: io.NopCloser(strings.NewReader("{}")), Request: request,
+		}, nil
+	}))
+	ctx, parent := runtime.tracerProvider.Tracer("test").Start(context.Background(), "parent")
+	request, err := http.NewRequestWithContext(
+		ctx,
+		http.MethodPost,
+		"https://private.internal/prefix/v1/messages",
+		strings.NewReader(`{"model":"private-model"}`),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("x-api-key", "private-key")
+	response, err := transport.RoundTrip(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = response.Body.Close()
+	parent.End()
+
+	var clientSpan sdktrace.ReadOnlySpan
+	for _, span := range spans.Ended() {
+		if span.SpanKind() == trace.SpanKindClient {
+			clientSpan = span
+			break
+		}
+	}
+	if clientSpan == nil {
+		t.Fatalf("client span not found: %d spans", len(spans.Ended()))
+	}
+	assertSpanDoesNotContain(t, clientSpan, "private.internal", "/prefix", "private-model", "private-key")
+	var attributes strings.Builder
+	for _, attr := range clientSpan.Attributes() {
+		attributes.WriteString(attr.Value.Emit())
+	}
+	if !strings.Contains(attributes.String(), "/anthropic/messages") {
+		t.Fatalf("static upstream route missing: %s", attributes.String())
+	}
+}
+
 func TestNormalizeEndpoint(t *testing.T) {
 	tests := []struct {
 		provider, path, want string

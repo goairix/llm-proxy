@@ -11,6 +11,7 @@ import (
 	gatewaysnapshot "github.com/goairix/llm-proxy/internal/application/gateway/snapshot"
 	catalogmodel "github.com/goairix/llm-proxy/internal/domain/catalog/model"
 	"github.com/goairix/llm-proxy/internal/infrastructure/config"
+	anthropicconnector "github.com/goairix/llm-proxy/internal/infrastructure/connector/anthropic"
 	fakeconnector "github.com/goairix/llm-proxy/internal/infrastructure/connector/fake"
 	openconnector "github.com/goairix/llm-proxy/internal/infrastructure/connector/openai"
 	"github.com/goairix/llm-proxy/internal/infrastructure/observability"
@@ -59,9 +60,22 @@ func NewUnifiedGatewayHandlers(cfg *config.Config, runtime *GatewayRuntime, ciph
 	if err != nil {
 		return nil, err
 	}
+	anthropic, err := anthropicconnector.New(anthropicconnector.Options{
+		Client: &http.Client{
+			Transport: telemetry.TransportFor(catalogmodel.ConnectorAnthropic, "messages", base),
+		},
+		CredentialOpener:  cipherRuntime.Cipher,
+		CompleteTimeout:   upstream.CompleteTimeout,
+		StreamIdleTimeout: upstream.StreamIdleTimeout,
+	})
+	if err != nil {
+		return nil, err
+	}
 	registry := staticConnectorRegistry{
-		catalogmodel.ConnectorFake:   fakeconnector.New(fakeconnector.Options{}),
-		catalogmodel.ConnectorOpenAI: official, catalogmodel.ConnectorOpenAICompatible: compatible,
+		catalogmodel.ConnectorFake:             fakeconnector.New(fakeconnector.Options{}),
+		catalogmodel.ConnectorOpenAI:           official,
+		catalogmodel.ConnectorOpenAICompatible: compatible,
+		catalogmodel.ConnectorAnthropic:        anthropic,
 	}
 	gateway := gatewayservice.New(runtime.Store(), registry, gatewaysnapshot.NewCredentialSelector())
 	handlers.OpenAIChat = gatewayhandler.NewOpenAI(gateway)

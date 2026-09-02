@@ -229,14 +229,14 @@ func normalizeProvider(provider string) string {
 }
 
 func normalizeGatewayProvider(provider string) string {
-	if provider == "openai" || provider == "openai_compatible" {
+	if provider == "openai" || provider == "openai_compatible" || provider == "anthropic" {
 		return provider
 	}
 	return "unknown"
 }
 
 func normalizeGatewayEndpoint(endpoint string) string {
-	if endpoint == "responses" || endpoint == "chat.completions" {
+	if endpoint == "responses" || endpoint == "chat.completions" || endpoint == "messages" {
 		return endpoint
 	}
 	return "other"

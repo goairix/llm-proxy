@@ -8,6 +8,7 @@ import (
 
 	"go.uber.org/zap"
 
+	catalogmodel "github.com/goairix/llm-proxy/internal/domain/catalog/model"
 	"github.com/goairix/llm-proxy/internal/infrastructure/config"
 )
 
@@ -41,7 +42,12 @@ func TestUnifiedGatewayHandlersUseSharedEmptySnapshotStore(t *testing.T) {
 	if handlers == nil || handlers.OpenAIChat == nil || handlers.OpenAIResponses == nil || handlers.Anthropic == nil || handlers.cipher != cipher.Cipher {
 		t.Fatalf("enabled handlers=%+v", handlers)
 	}
-	for _, connectorType := range []string{"fake", "openai", "openai_compatible"} {
+	for _, connectorType := range []string{
+		catalogmodel.ConnectorFake,
+		catalogmodel.ConnectorOpenAI,
+		catalogmodel.ConnectorOpenAICompatible,
+		catalogmodel.ConnectorAnthropic,
+	} {
 		if connector, ok := handlers.registry.Find(connectorType); !ok || connector == nil {
 			t.Fatalf("connector %s is not registered", connectorType)
 		}
