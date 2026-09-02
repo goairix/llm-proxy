@@ -2,6 +2,7 @@ package provider
 
 import (
 	"context"
+	"encoding/base64"
 	"testing"
 	"time"
 
@@ -38,7 +39,9 @@ func gatewayProviderConfig() *config.Config {
 	return &config.Config{
 		Gateway: config.GatewayConfig{
 			Enabled: true, SnapshotInterval: time.Hour, SnapshotTimeout: time.Second, RetryBackoff: time.Second,
+			Upstream: config.UpstreamTransportConfig{ConnectTimeout: time.Second, TLSHandshakeTimeout: time.Second, ResponseHeaderTimeout: time.Second, CompleteTimeout: time.Second, StreamIdleTimeout: time.Second, IdleConnectionTimeout: time.Second, MaxIdleConnections: 10, MaxIdleConnectionsPerHost: 2},
 		},
-		Database: config.DatabaseConfig{Driver: "postgres", DSN: "postgres://invalid/offline"},
+		Database:             config.DatabaseConfig{Driver: "postgres", DSN: "postgres://invalid/offline"},
+		CredentialEncryption: config.CredentialEncryptionConfig{CurrentKeyVersion: "v1", Keys: map[string]string{"v1": base64.StdEncoding.EncodeToString([]byte("0123456789abcdef0123456789abcdef"))}},
 	}
 }

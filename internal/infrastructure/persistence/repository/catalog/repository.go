@@ -150,10 +150,6 @@ func (r *DeploymentRepository) HasActiveByProvider(ctx context.Context, provider
 	return (repositoryBase{r.manager}).exists(ctx, &entity.Deployment{}, "provider_id = ? AND status = ?", providerID, sharedmodel.StatusActive)
 }
 
-func (r *DeploymentRepository) HasActiveByCredential(ctx context.Context, credentialID uuid.UUID) (bool, error) {
-	return (repositoryBase{r.manager}).exists(ctx, &entity.Deployment{}, "credential_id = ? AND status = ?", credentialID, sharedmodel.StatusActive)
-}
-
 func (r *DeploymentRepository) listDeployments(ctx context.Context, filter queryFilter, limit, offset int) ([]catalogmodel.Deployment, error) {
 	var records []entity.Deployment
 	if err := r.list(ctx, &records, filter, limit, offset); err != nil {

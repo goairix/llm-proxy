@@ -66,7 +66,7 @@ func TestCreateVirtualKeyReturnsPlaintextOnceAndPersistsOnlyHash(t *testing.T) {
 }
 
 func TestCreateProviderCredentialPersistsOnlySealedCredential(t *testing.T) {
-	provider, _ := catalogmodel.NewProvider("Fake", "fake")
+	provider, _ := catalogmodel.NewProvider("OpenAI", catalogmodel.ConnectorOpenAI, "https://api.openai.com")
 	credentials := &credentialRepo{}
 	cipher := &recordingCipher{sealed: catalogmodel.SealedCredential{
 		KeyVersion: "v1", WrappedKeyNonce: []byte{1}, WrappedDataKey: []byte{2}, PayloadNonce: []byte{3}, Ciphertext: []byte{4},
@@ -88,7 +88,7 @@ func TestCreateProviderCredentialPersistsOnlySealedCredential(t *testing.T) {
 	if credentials.saved == nil || credentials.saved.Sealed.KeyVersion != "v1" || string(credentials.saved.Sealed.Ciphertext) != string([]byte{4}) {
 		t.Fatalf("saved credential = %+v", credentials.saved)
 	}
-	if result.KeyVersion != "v1" || result.ProviderID != provider.ID {
+	if result.ProviderID != provider.ID {
 		t.Fatalf("result = %+v", result)
 	}
 	if string(cipher.plaintext) != string(plaintext) {
@@ -96,8 +96,114 @@ func TestCreateProviderCredentialPersistsOnlySealedCredential(t *testing.T) {
 	}
 }
 
-func TestCreateProviderCredentialRejectsNonPlatformScope(t *testing.T) {
-	provider, _ := catalogmodel.NewProvider("Fake", "fake")
+func TestCreateProviderNormalizesBaseURL(t *testing.T) {
+	providers := &providerRepo{}
+	service := NewCatalogService(
+		providers, &credentialRepo{}, &deploymentRepo{}, &aliasRepo{}, &targetRepo{},
+		&organizationRepo{}, &projectRepo{}, &revisionRepo{}, &testTransactions{}, &recordingCipher{}, nil,
+	)
+	result, err := service.CreateProvider(context.Background(), dto.CreateProvider{
+		Name: "OpenAI", ConnectorType: catalogmodel.ConnectorOpenAI, BaseURL: "https://api.openai.com/",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Provider.BaseURL != "https://api.openai.com" || providers.items[result.Provider.ID].BaseURL != "https://api.openai.com" {
+		t.Fatalf("provider=%+v", result.Provider)
+	}
+}
+
+func TestCreateProjectScopedProviderCredential(t *testing.T) {
+	organization, _ := tenantmodel.NewOrganization("Acme")
+	project, _ := tenantmodel.NewProject(organization.ID, "Production")
+	provider, _ := catalogmodel.NewProvider("OpenAI", catalogmodel.ConnectorOpenAI, "https://api.openai.com")
+	credentials := &credentialRepo{}
+	cipher := &recordingCipher{sealed: catalogmodel.SealedCredential{
+		KeyVersion: "v1", WrappedKeyNonce: []byte{1}, WrappedDataKey: []byte{2}, PayloadNonce: []byte{3}, Ciphertext: []byte{4},
+	}}
+	service := NewCatalogService(
+		&providerRepo{items: map[uuid.UUID]*catalogmodel.Provider{provider.ID: provider}}, credentials,
+		&deploymentRepo{}, &aliasRepo{}, &targetRepo{},
+		&organizationRepo{items: map[uuid.UUID]*tenantmodel.Organization{organization.ID: organization}},
+		&projectRepo{items: map[uuid.UUID]*tenantmodel.Project{project.ID: project}},
+		&revisionRepo{}, &testTransactions{}, cipher, nil,
+	)
+	result, err := service.CreateProviderCredential(context.Background(), dto.CreateProviderCredential{
+		ProviderID: provider.ID, Scope: catalogmodel.Scope{Kind: catalogmodel.ScopeProject, ProjectID: project.ID},
+		Credential: []byte(`{"api_key":"project-secret"}`),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Scope.Kind != catalogmodel.ScopeProject || result.Scope.ProjectID != project.ID || cipher.calls != 1 {
+		t.Fatalf("result=%+v cipher.calls=%d", result, cipher.calls)
+	}
+}
+
+func TestProviderCredentialRejectsInvalidPayloadBeforeSealing(t *testing.T) {
+	provider, _ := catalogmodel.NewProvider("OpenAI", catalogmodel.ConnectorOpenAI, "https://api.openai.com")
+	for _, payload := range [][]byte{[]byte(`{}`), []byte(`{"api_key":""}`), []byte(`{"api_key":"x","extra":true}`), []byte(`{"api_key":"x"}{}`)} {
+		t.Run(string(payload), func(t *testing.T) {
+			cipher := &recordingCipher{}
+			service := NewCatalogService(
+				&providerRepo{items: map[uuid.UUID]*catalogmodel.Provider{provider.ID: provider}}, &credentialRepo{},
+				&deploymentRepo{}, &aliasRepo{}, &targetRepo{}, &organizationRepo{}, &projectRepo{},
+				&revisionRepo{}, &testTransactions{}, cipher, nil,
+			)
+			_, err := service.CreateProviderCredential(context.Background(), dto.CreateProviderCredential{
+				ProviderID: provider.ID, Scope: catalogmodel.Scope{Kind: catalogmodel.ScopePlatform}, Credential: payload,
+			})
+			assertApplicationErrorCode(t, err, controlerrors.InvalidRequest)
+			if cipher.calls != 0 {
+				t.Fatal("invalid payload reached cipher")
+			}
+		})
+	}
+}
+
+func TestCanDisableLastProviderCredential(t *testing.T) {
+	provider, _ := catalogmodel.NewProvider("OpenAI", catalogmodel.ConnectorOpenAI, "https://api.openai.com")
+	credential, _ := catalogmodel.NewProviderCredential(provider.ID, catalogmodel.Scope{Kind: catalogmodel.ScopePlatform}, catalogmodel.SealedCredential{
+		KeyVersion: "v1", WrappedKeyNonce: []byte{1}, WrappedDataKey: []byte{2}, PayloadNonce: []byte{3}, Ciphertext: []byte{4},
+	})
+	notifier := &recordingRefreshNotifier{}
+	service := NewCatalogService(
+		&providerRepo{items: map[uuid.UUID]*catalogmodel.Provider{provider.ID: provider}},
+		&credentialRepo{items: map[uuid.UUID]*catalogmodel.ProviderCredential{credential.ID: credential}},
+		&deploymentRepo{}, &aliasRepo{}, &targetRepo{}, &organizationRepo{}, &projectRepo{},
+		&revisionRepo{}, &testTransactions{}, &recordingCipher{}, notifier,
+	)
+	status := sharedmodel.StatusDisabled
+	result, err := service.UpdateProviderCredential(context.Background(), dto.UpdateProviderCredential{ID: credential.ID, Status: &status})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != status || result.Revision == 0 || notifier.calls != 1 {
+		t.Fatalf("result=%+v notify=%d", result, notifier.calls)
+	}
+}
+
+func TestCreateDeploymentUsesProviderProtocolWithoutFixedCredential(t *testing.T) {
+	provider, _ := catalogmodel.NewProvider("OpenAI", catalogmodel.ConnectorOpenAI, "https://api.openai.com")
+	service := NewCatalogService(
+		&providerRepo{items: map[uuid.UUID]*catalogmodel.Provider{provider.ID: provider}}, &credentialRepo{},
+		&deploymentRepo{}, &aliasRepo{}, &targetRepo{}, &organizationRepo{}, &projectRepo{},
+		&revisionRepo{}, &testTransactions{}, &recordingCipher{}, nil,
+	)
+	result, err := service.CreateDeployment(context.Background(), dto.CreateDeployment{
+		ProviderID: provider.ID, Name: "responses", UpstreamModel: "gpt-5", UpstreamProtocol: catalogmodel.UpstreamResponses,
+		Scope: catalogmodel.Scope{Kind: catalogmodel.ScopePlatform}, Capabilities: catalogmodel.CapabilitySet{Text: true},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Deployment.UpstreamProtocol != catalogmodel.UpstreamResponses {
+		t.Fatalf("deployment=%+v", result.Deployment)
+	}
+}
+
+func TestCreateProviderCredentialRejectsFakeProvider(t *testing.T) {
+	provider, _ := catalogmodel.NewProvider("Fake", catalogmodel.ConnectorFake, "")
 	credentials := &credentialRepo{}
 	cipher := &recordingCipher{}
 	service := NewCatalogService(
@@ -107,22 +213,22 @@ func TestCreateProviderCredentialRejectsNonPlatformScope(t *testing.T) {
 	)
 	_, err := service.CreateProviderCredential(context.Background(), dto.CreateProviderCredential{
 		ProviderID: provider.ID,
-		Scope:      catalogmodel.Scope{Kind: catalogmodel.ScopeProject, ProjectID: uuid.Must(uuid.NewV7())},
-		Credential: []byte(`{}`),
+		Scope:      catalogmodel.Scope{Kind: catalogmodel.ScopePlatform},
+		Credential: []byte(`{"api_key":"not-used"}`),
 	})
 	var applicationError *controlerrors.Error
 	if !errors.As(err, &applicationError) || applicationError.Code != controlerrors.InvalidRequest {
 		t.Fatalf("error = %v; want InvalidRequest", err)
 	}
 	if credentials.saved != nil || cipher.calls != 0 {
-		t.Fatal("non-platform credential reached cipher or repository")
+		t.Fatal("fake provider credential reached cipher or repository")
 	}
 }
 
 func TestCreateDeploymentAliasAndRouteTargetValidateLogicalRelations(t *testing.T) {
 	organization, _ := tenantmodel.NewOrganization("Acme")
 	project, _ := tenantmodel.NewProject(organization.ID, "Production")
-	provider, _ := catalogmodel.NewProvider("Fake", "fake")
+	provider, _ := catalogmodel.NewProvider("Fake", catalogmodel.ConnectorFake, "")
 	deployments := &deploymentRepo{items: map[uuid.UUID]*catalogmodel.Deployment{}}
 	aliases := &aliasRepo{items: map[uuid.UUID]*catalogmodel.ModelAlias{}}
 	targets := &targetRepo{items: map[uuid.UUID]*catalogmodel.RouteTarget{}}
@@ -136,7 +242,7 @@ func TestCreateDeploymentAliasAndRouteTargetValidateLogicalRelations(t *testing.
 	)
 
 	deploymentResult, err := service.CreateDeployment(context.Background(), dto.CreateDeployment{
-		ProviderID: provider.ID, Name: "fake", UpstreamModel: "fake-model", ConnectorType: "fake",
+		ProviderID: provider.ID, Name: "fake", UpstreamModel: "fake-model", UpstreamProtocol: catalogmodel.UpstreamFake,
 		Scope: catalogmodel.Scope{Kind: catalogmodel.ScopePlatform}, Capabilities: catalogmodel.CapabilitySet{Text: true, Streaming: true},
 	})
 	if err != nil {
@@ -256,7 +362,7 @@ func TestUpdateVirtualKeyRejectsMissingOrganization(t *testing.T) {
 func TestUpdateDeploymentRejectsMissingProvider(t *testing.T) {
 	providerID := uuid.Must(uuid.NewV7())
 	deployment, _ := catalogmodel.NewDeployment(
-		providerID, nil, "fake", "fake-model", "fake",
+		providerID, "fake", "fake-model", catalogmodel.UpstreamFake,
 		catalogmodel.Scope{Kind: catalogmodel.ScopePlatform},
 		catalogmodel.CapabilitySet{Text: true},
 	)
@@ -272,11 +378,10 @@ func TestUpdateDeploymentRejectsMissingProvider(t *testing.T) {
 	assertApplicationErrorCode(t, err, controlerrors.NotFound)
 }
 
-func TestUpdateDeploymentRejectsMissingCredential(t *testing.T) {
-	provider, _ := catalogmodel.NewProvider("OpenAI", "openai")
-	credentialID := uuid.Must(uuid.NewV7())
+func TestUpdateDeploymentRejectsUnsupportedProviderProtocol(t *testing.T) {
+	provider, _ := catalogmodel.NewProvider("OpenAI", catalogmodel.ConnectorOpenAI, "https://api.openai.com")
 	deployment, _ := catalogmodel.NewDeployment(
-		provider.ID, &credentialID, "openai", "gpt-test", "openai",
+		provider.ID, "openai", "gpt-test", catalogmodel.UpstreamResponses,
 		catalogmodel.Scope{Kind: catalogmodel.ScopePlatform},
 		catalogmodel.CapabilitySet{Text: true},
 	)
@@ -287,10 +392,10 @@ func TestUpdateDeploymentRejectsMissingCredential(t *testing.T) {
 		&aliasRepo{}, &targetRepo{}, &organizationRepo{}, &projectRepo{},
 		&revisionRepo{}, &testTransactions{}, &recordingCipher{}, nil,
 	)
-	name := "renamed"
+	protocol := catalogmodel.UpstreamFake
 
-	_, err := service.UpdateDeployment(context.Background(), dto.UpdateDeployment{ID: deployment.ID, Name: &name})
-	assertApplicationErrorCode(t, err, controlerrors.NotFound)
+	_, err := service.UpdateDeployment(context.Background(), dto.UpdateDeployment{ID: deployment.ID, UpstreamProtocol: &protocol})
+	assertApplicationErrorCode(t, err, controlerrors.InvalidRequest)
 }
 
 func TestUpdateModelAliasRejectsMissingOrganization(t *testing.T) {
@@ -313,9 +418,9 @@ func TestUpdateRouteTargetRevalidatesLogicalRelations(t *testing.T) {
 	organization, _ := tenantmodel.NewOrganization("Acme")
 	project, _ := tenantmodel.NewProject(organization.ID, "Production")
 	alias, _ := catalogmodel.NewModelAlias(project.ID, "assistant")
-	provider, _ := catalogmodel.NewProvider("Fake", "fake")
+	provider, _ := catalogmodel.NewProvider("Fake", catalogmodel.ConnectorFake, "")
 	deployment, _ := catalogmodel.NewDeployment(
-		provider.ID, nil, "fake", "fake-model", "fake",
+		provider.ID, "fake", "fake-model", catalogmodel.UpstreamFake,
 		catalogmodel.Scope{Kind: catalogmodel.ScopeProject, ProjectID: uuid.Must(uuid.NewV7())},
 		catalogmodel.CapabilitySet{Text: true},
 	)
@@ -337,9 +442,9 @@ func TestUpdateRouteTargetRevalidatesLogicalRelations(t *testing.T) {
 }
 
 func TestCannotDisableProviderReferencedByActiveDeployment(t *testing.T) {
-	provider, _ := catalogmodel.NewProvider("Fake", "fake")
+	provider, _ := catalogmodel.NewProvider("Fake", catalogmodel.ConnectorFake, "")
 	deployment, _ := catalogmodel.NewDeployment(
-		provider.ID, nil, "fake", "fake-model", "fake", catalogmodel.Scope{Kind: catalogmodel.ScopePlatform},
+		provider.ID, "fake", "fake-model", catalogmodel.UpstreamFake, catalogmodel.Scope{Kind: catalogmodel.ScopePlatform},
 		catalogmodel.CapabilitySet{Text: true},
 	)
 	service := NewCatalogService(
@@ -354,34 +459,10 @@ func TestCannotDisableProviderReferencedByActiveDeployment(t *testing.T) {
 	assertApplicationErrorCode(t, err, controlerrors.Conflict)
 }
 
-func TestCannotDisableCredentialReferencedByActiveDeployment(t *testing.T) {
-	provider, _ := catalogmodel.NewProvider("OpenAI", "openai")
-	credential, _ := catalogmodel.NewProviderCredential(
-		provider.ID, catalogmodel.Scope{Kind: catalogmodel.ScopePlatform},
-		catalogmodel.SealedCredential{KeyVersion: "v1", WrappedKeyNonce: []byte{1}, WrappedDataKey: []byte{2}, PayloadNonce: []byte{3}, Ciphertext: []byte{4}},
-	)
-	credentialID := credential.ID
-	deployment, _ := catalogmodel.NewDeployment(
-		provider.ID, &credentialID, "primary", "gpt-test", "openai", catalogmodel.Scope{Kind: catalogmodel.ScopePlatform},
-		catalogmodel.CapabilitySet{Text: true},
-	)
-	service := NewCatalogService(
-		&providerRepo{items: map[uuid.UUID]*catalogmodel.Provider{provider.ID: provider}},
-		&credentialRepo{items: map[uuid.UUID]*catalogmodel.ProviderCredential{credential.ID: credential}},
-		&deploymentRepo{items: map[uuid.UUID]*catalogmodel.Deployment{deployment.ID: deployment}},
-		&aliasRepo{}, &targetRepo{}, &organizationRepo{}, &projectRepo{},
-		&revisionRepo{}, &testTransactions{}, &recordingCipher{}, nil,
-	)
-	status := sharedmodel.StatusDisabled
-
-	_, err := service.UpdateProviderCredential(context.Background(), dto.UpdateProviderCredential{ID: credential.ID, Status: &status})
-	assertApplicationErrorCode(t, err, controlerrors.Conflict)
-}
-
 func TestCannotDisableDeploymentReferencedByActiveTarget(t *testing.T) {
-	provider, _ := catalogmodel.NewProvider("Fake", "fake")
+	provider, _ := catalogmodel.NewProvider("Fake", catalogmodel.ConnectorFake, "")
 	deployment, _ := catalogmodel.NewDeployment(
-		provider.ID, nil, "fake", "fake-model", "fake", catalogmodel.Scope{Kind: catalogmodel.ScopePlatform},
+		provider.ID, "fake", "fake-model", catalogmodel.UpstreamFake, catalogmodel.Scope{Kind: catalogmodel.ScopePlatform},
 		catalogmodel.CapabilitySet{Text: true},
 	)
 	target, _ := catalogmodel.NewRouteTarget(uuid.Must(uuid.NewV7()), deployment.ID, 0, 100)
@@ -402,9 +483,9 @@ func TestCannotDisableActiveTargetBeforeAlias(t *testing.T) {
 	project, _ := tenantmodel.NewProject(organization.ID, "Production")
 	alias, _ := catalogmodel.NewModelAlias(project.ID, "assistant")
 	alias.Status = sharedmodel.StatusActive
-	provider, _ := catalogmodel.NewProvider("Fake", "fake")
+	provider, _ := catalogmodel.NewProvider("Fake", catalogmodel.ConnectorFake, "")
 	deployment, _ := catalogmodel.NewDeployment(
-		provider.ID, nil, "fake", "fake-model", "fake", catalogmodel.Scope{Kind: catalogmodel.ScopePlatform},
+		provider.ID, "fake", "fake-model", catalogmodel.UpstreamFake, catalogmodel.Scope{Kind: catalogmodel.ScopePlatform},
 		catalogmodel.CapabilitySet{Text: true},
 	)
 	target, _ := catalogmodel.NewRouteTarget(alias.ID, deployment.ID, 0, 100)
@@ -446,9 +527,9 @@ func TestDisabledAliasCanPrepareTargetBeforeReactivation(t *testing.T) {
 	project, _ := tenantmodel.NewProject(organization.ID, "Production")
 	alias, _ := catalogmodel.NewModelAlias(project.ID, "assistant")
 	alias.Status = sharedmodel.StatusDisabled
-	provider, _ := catalogmodel.NewProvider("Fake", "fake")
+	provider, _ := catalogmodel.NewProvider("Fake", catalogmodel.ConnectorFake, "")
 	deployment, _ := catalogmodel.NewDeployment(
-		provider.ID, nil, "fake", "fake-model", "fake", catalogmodel.Scope{Kind: catalogmodel.ScopePlatform},
+		provider.ID, "fake", "fake-model", catalogmodel.UpstreamFake, catalogmodel.Scope{Kind: catalogmodel.ScopePlatform},
 		catalogmodel.CapabilitySet{Text: true},
 	)
 	target, _ := catalogmodel.NewRouteTarget(alias.ID, deployment.ID, 0, 100)
@@ -486,9 +567,9 @@ func TestDisabledAliasCanCreateTargetBeforeActivation(t *testing.T) {
 	project, _ := tenantmodel.NewProject(organization.ID, "Production")
 	alias, _ := catalogmodel.NewModelAlias(project.ID, "assistant")
 	alias.Status = sharedmodel.StatusDisabled
-	provider, _ := catalogmodel.NewProvider("Fake", "fake")
+	provider, _ := catalogmodel.NewProvider("Fake", catalogmodel.ConnectorFake, "")
 	deployment, _ := catalogmodel.NewDeployment(
-		provider.ID, nil, "fake", "fake-model", "fake", catalogmodel.Scope{Kind: catalogmodel.ScopePlatform},
+		provider.ID, "fake", "fake-model", catalogmodel.UpstreamFake, catalogmodel.Scope{Kind: catalogmodel.ScopePlatform},
 		catalogmodel.CapabilitySet{Text: true},
 	)
 	service := NewCatalogService(
@@ -721,14 +802,6 @@ func (*deploymentRepo) ListByProvider(context.Context, uuid.UUID, int, int) ([]c
 func (r *deploymentRepo) HasActiveByProvider(_ context.Context, providerID uuid.UUID) (bool, error) {
 	for _, deployment := range r.items {
 		if deployment.ProviderID == providerID && deployment.Status == sharedmodel.StatusActive {
-			return true, nil
-		}
-	}
-	return false, nil
-}
-func (r *deploymentRepo) HasActiveByCredential(_ context.Context, credentialID uuid.UUID) (bool, error) {
-	for _, deployment := range r.items {
-		if deployment.CredentialID != nil && *deployment.CredentialID == credentialID && deployment.Status == sharedmodel.StatusActive {
 			return true, nil
 		}
 	}

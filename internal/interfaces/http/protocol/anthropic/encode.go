@@ -28,6 +28,8 @@ func EncodeResponse(writer io.Writer, response inference.Response) error {
 		switch block.Type {
 		case inference.ContentText:
 			content = append(content, responseContentBlock{Type: "text", Text: block.Text.Text})
+		case inference.ContentRefusal:
+			content = append(content, responseContentBlock{Type: "text", Text: block.Refusal.Text})
 		case inference.ContentToolCall:
 			var object map[string]json.RawMessage
 			if err := json.Unmarshal(block.ToolCall.Arguments, &object); err != nil || object == nil {
@@ -97,6 +99,13 @@ func EncodeStream(ctx context.Context, writer FlushWriter, stream inferenceport.
 			if err := writeSSEEvent(writer, "content_block_delta", contentBlockDeltaData{
 				Type: "content_block_delta", Index: event.TextDelta.Index,
 				Delta: textDelta{Type: "text_delta", Text: event.TextDelta.Text},
+			}); err != nil {
+				return err
+			}
+		case inference.EventRefusalDelta:
+			if err := writeSSEEvent(writer, "content_block_delta", contentBlockDeltaData{
+				Type: "content_block_delta", Index: event.RefusalDelta.Index,
+				Delta: textDelta{Type: "text_delta", Text: event.RefusalDelta.Text},
 			}); err != nil {
 				return err
 			}

@@ -65,6 +65,11 @@ func responseEvents(response inference.Response, chunkSize int) []inference.Even
 			for _, chunk := range chunkText(block.Text.Text, chunkSize) {
 				events = append(events, inference.NewTextDelta(index, chunk))
 			}
+		case inference.ContentRefusal:
+			events = append(events, inference.NewContentBlockStart(index, inference.ContentRefusal))
+			for _, chunk := range chunkText(block.Refusal.Text, chunkSize) {
+				events = append(events, inference.NewRefusalDelta(index, chunk))
+			}
 		case inference.ContentToolCall:
 			events = append(events, inference.NewToolCallStart(index, block.ToolCall.ID, block.ToolCall.Name))
 			for _, chunk := range chunkText(string(block.ToolCall.Arguments), chunkSize) {

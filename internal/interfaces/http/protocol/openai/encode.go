@@ -35,6 +35,9 @@ func EncodeResponse(writer io.Writer, response inference.Response) error {
 				ID: block.ToolCall.ID, Type: "function",
 				Function: responseFunctionCall{Name: block.ToolCall.Name, Arguments: string(block.ToolCall.Arguments)},
 			})
+		case inference.ContentRefusal:
+			value := block.Refusal.Text
+			message.Refusal = &value
 		}
 	}
 	if text.Len() > 0 {
@@ -84,6 +87,10 @@ func EncodeStream(ctx context.Context, writer FlushWriter, stream inferenceport.
 			}
 		case inference.EventTextDelta:
 			if err := state.writeChunk(writer, chunkDelta{Content: event.TextDelta.Text}, nil); err != nil {
+				return err
+			}
+		case inference.EventRefusalDelta:
+			if err := state.writeChunk(writer, chunkDelta{Refusal: event.RefusalDelta.Text}, nil); err != nil {
 				return err
 			}
 		case inference.EventToolCallStart:

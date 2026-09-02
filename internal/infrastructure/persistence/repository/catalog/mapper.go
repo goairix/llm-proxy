@@ -17,6 +17,7 @@ func providerToEntity(domain *catalogmodel.Provider) *entity.Provider {
 		BaseEntity:    baseToEntity(domain.Entity),
 		Name:          domain.Name,
 		ConnectorType: domain.ConnectorType,
+		BaseURL:       domain.BaseURL,
 		Status:        string(domain.Status),
 	}
 }
@@ -26,6 +27,7 @@ func providerToDomain(record *entity.Provider) (*catalogmodel.Provider, error) {
 		Entity:        baseToDomain(record.BaseEntity),
 		Name:          record.Name,
 		ConnectorType: record.ConnectorType,
+		BaseURL:       record.BaseURL,
 		Status:        sharedmodel.Status(record.Status),
 	}
 	if err := domain.Validate(); err != nil {
@@ -92,17 +94,16 @@ func deploymentToEntity(domain *catalogmodel.Deployment) (*entity.Deployment, er
 	}
 	organizationID, projectID := scopeIDs(domain.Scope)
 	return &entity.Deployment{
-		BaseEntity:     baseToEntity(domain.Entity),
-		ProviderID:     domain.ProviderID,
-		CredentialID:   cloneUUID(domain.CredentialID),
-		Name:           domain.Name,
-		UpstreamModel:  domain.UpstreamModel,
-		ConnectorType:  domain.ConnectorType,
-		ScopeKind:      string(domain.Scope.Kind),
-		OrganizationID: organizationID,
-		ProjectID:      projectID,
-		Capabilities:   string(capabilities),
-		Status:         string(domain.Status),
+		BaseEntity:       baseToEntity(domain.Entity),
+		ProviderID:       domain.ProviderID,
+		Name:             domain.Name,
+		UpstreamModel:    domain.UpstreamModel,
+		UpstreamProtocol: string(domain.UpstreamProtocol),
+		ScopeKind:        string(domain.Scope.Kind),
+		OrganizationID:   organizationID,
+		ProjectID:        projectID,
+		Capabilities:     string(capabilities),
+		Status:           string(domain.Status),
 	}, nil
 }
 
@@ -116,15 +117,14 @@ func deploymentToDomain(record *entity.Deployment) (*catalogmodel.Deployment, er
 		return nil, fmt.Errorf("decode deployment capabilities: %w", err)
 	}
 	domain := &catalogmodel.Deployment{
-		Entity:        baseToDomain(record.BaseEntity),
-		ProviderID:    record.ProviderID,
-		CredentialID:  cloneUUID(record.CredentialID),
-		Name:          record.Name,
-		UpstreamModel: record.UpstreamModel,
-		ConnectorType: record.ConnectorType,
-		Scope:         scope,
-		Capabilities:  capabilities,
-		Status:        sharedmodel.Status(record.Status),
+		Entity:           baseToDomain(record.BaseEntity),
+		ProviderID:       record.ProviderID,
+		Name:             record.Name,
+		UpstreamModel:    record.UpstreamModel,
+		UpstreamProtocol: catalogmodel.UpstreamProtocol(record.UpstreamProtocol),
+		Scope:            scope,
+		Capabilities:     capabilities,
+		Status:           sharedmodel.Status(record.Status),
 	}
 	if err := domain.Validate(); err != nil {
 		return nil, fmt.Errorf("map deployment: %w", err)

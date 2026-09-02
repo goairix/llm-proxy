@@ -18,6 +18,7 @@ type completionChoice struct {
 type assistantMessageDTO struct {
 	Role      string             `json:"role"`
 	Content   *string            `json:"content"`
+	Refusal   *string            `json:"refusal,omitempty"`
 	ToolCalls []responseToolCall `json:"tool_calls,omitempty"`
 }
 
@@ -61,6 +62,7 @@ type chunkChoice struct {
 type chunkDelta struct {
 	Role      string          `json:"role,omitempty"`
 	Content   string          `json:"content,omitempty"`
+	Refusal   string          `json:"refusal,omitempty"`
 	ToolCalls []toolCallDelta `json:"tool_calls,omitempty"`
 }
 

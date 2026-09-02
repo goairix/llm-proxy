@@ -1,6 +1,8 @@
 package snapshot
 
 import (
+	"crypto/sha256"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -14,6 +16,8 @@ import (
 
 var fixedNow = time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
 
+const snapshotTestVirtualKey = "llmp_v1_snapshot-provider-test"
+
 func TestCompilerIndexesVirtualKeyAndModelAlias(t *testing.T) {
 	config := validSourceConfig(t)
 
@@ -26,7 +30,8 @@ func TestCompilerIndexesVirtualKeyAndModelAlias(t *testing.T) {
 		t.Fatalf("access = %+v, ok=%v", access, ok)
 	}
 	plan, ok := compiled.routes[RouteKey{ProjectID: access.ProjectID, Model: "assistant"}]
-	if !ok || plan.Deployment.ConnectorType != "fake" || !plan.Deployment.Capabilities.Streaming {
+	provider, providerOK := compiled.providers[plan.Deployment.ProviderID]
+	if !ok || !providerOK || provider.ConnectorType != catalogmodel.ConnectorFake || !plan.Deployment.Capabilities.Streaming {
 		t.Fatalf("plan = %+v, ok=%v", plan, ok)
 	}
 	if compiled.Revision() != config.Revision || !compiled.BuiltAt().Equal(fixedNow) {
@@ -118,58 +123,151 @@ func TestCompilerRejectsInvalidRoutingGraph(t *testing.T) {
 	}
 }
 
-func TestCompilerRejectsCredentialOutsideDeploymentScope(t *testing.T) {
-	config := validSourceConfig(t)
-	otherOrganization, _ := tenantmodel.NewOrganization("Other")
-	otherProject, _ := tenantmodel.NewProject(otherOrganization.ID, "Other Project")
-	config.Organizations = append(config.Organizations, *otherOrganization)
-	config.Projects = append(config.Projects, *otherProject)
+func TestCompilerPublishesRouteWithEmptyCredentialPoolAfterRevocation(t *testing.T) {
+	source := validOpenAISourceConfig(t)
+	source.Credentials[0].Status = sharedmodel.StatusDisabled
+	source.Revision++
 
-	provider, _ := catalogmodel.NewProvider("OpenAI", "openai")
-	sealed := testSealedCredential()
-	credential, _ := catalogmodel.NewProviderCredential(provider.ID, catalogmodel.Scope{Kind: catalogmodel.ScopeProject, ProjectID: otherProject.ID}, sealed)
-	credentialID := credential.ID
-	deployment, _ := catalogmodel.NewDeployment(
-		provider.ID, &credentialID, "OpenAI", "gpt-test", "openai",
-		catalogmodel.Scope{Kind: catalogmodel.ScopeProject, ProjectID: config.Projects[0].ID},
-		catalogmodel.CapabilitySet{Text: true},
-	)
-	config.Providers = append(config.Providers, *provider)
-	config.Credentials = append(config.Credentials, *credential)
-	config.Deployments = append(config.Deployments, *deployment)
-
-	_, err := NewCompiler().Compile(config, fixedNow)
-	if err == nil || !strings.Contains(err.Error(), "作用域") {
-		t.Fatalf("error = %v; want scope error", err)
-	}
-}
-
-func TestCompilerCopiesCredentialEnvelopeWithoutPlaintext(t *testing.T) {
-	config := validSourceConfig(t)
-	provider, _ := catalogmodel.NewProvider("OpenAI", "openai")
-	sealed := testSealedCredential()
-	credential, _ := catalogmodel.NewProviderCredential(provider.ID, catalogmodel.Scope{Kind: catalogmodel.ScopePlatform}, sealed)
-	credentialID := credential.ID
-	deployment, _ := catalogmodel.NewDeployment(
-		provider.ID, &credentialID, "OpenAI", "gpt-test", "openai",
-		catalogmodel.Scope{Kind: catalogmodel.ScopePlatform}, catalogmodel.CapabilitySet{Text: true, Tools: true},
-	)
-	config.Providers = append(config.Providers, *provider)
-	config.Credentials = append(config.Credentials, *credential)
-	config.Deployments[0] = *deployment
-	config.RouteTargets[0].DeploymentID = deployment.ID
-
-	compiled, err := NewCompiler().Compile(config, fixedNow)
+	compiled, err := NewCompiler().Compile(source, fixedNow)
 	if err != nil {
 		t.Fatal(err)
 	}
-	plan := compiled.routes[RouteKey{ProjectID: config.Projects[0].ID, Model: "assistant"}]
-	if plan.Deployment.Credential == nil || plan.Deployment.Credential.Sealed.KeyVersion != "v1" || !plan.Deployment.Capabilities.Tools {
-		t.Fatalf("plan = %+v", plan)
+	session := Session{snapshot: compiled}
+	access, err := session.Authenticate(snapshotTestVirtualKey, fixedNow)
+	if err != nil {
+		t.Fatal(err)
 	}
-	credential.Sealed.Ciphertext[0] = 99
-	if plan.Deployment.Credential.Sealed.Ciphertext[0] == 99 {
-		t.Fatal("compiled snapshot aliases source credential bytes")
+	plan, err := session.Resolve(access.ProjectID, "assistant")
+	if err != nil || plan.Deployment.ProviderID == uuid.Nil {
+		t.Fatalf("plan=%+v err=%v", plan, err)
+	}
+	provider, err := session.Provider(plan.Deployment.ProviderID)
+	if err != nil || provider.ConnectorType != catalogmodel.ConnectorOpenAI || provider.BaseURL != "https://api.openai.com" {
+		t.Fatalf("provider=%+v err=%v", provider, err)
+	}
+	if _, err := session.Provider(uuid.Must(uuid.NewV7())); !errors.Is(err, ErrProviderUnavailable) {
+		t.Fatalf("missing provider error=%v", err)
+	}
+	if _, err := session.CredentialPool(access, plan.Deployment.ProviderID); !errors.Is(err, ErrCredentialUnavailable) {
+		t.Fatalf("credential pool error=%v", err)
+	}
+}
+
+func TestCompilerExcludesCredentialsInDisabledScopes(t *testing.T) {
+	source := validOpenAISourceConfig(t)
+	source.Credentials[0].Status = sharedmodel.StatusDisabled
+	disabledOrganization, _ := tenantmodel.NewOrganization("Disabled")
+	disabledOrganization.Status = sharedmodel.StatusDisabled
+	disabledProject, _ := tenantmodel.NewProject(source.Organizations[0].ID, "Disabled Project")
+	disabledProject.Status = sharedmodel.StatusDisabled
+	organizationCredential, _ := catalogmodel.NewProviderCredential(
+		source.Providers[0].ID,
+		catalogmodel.Scope{Kind: catalogmodel.ScopeOrganization, OrganizationID: disabledOrganization.ID},
+		sealedWithCiphertext(40),
+	)
+	projectCredential, _ := catalogmodel.NewProviderCredential(
+		source.Providers[0].ID,
+		catalogmodel.Scope{Kind: catalogmodel.ScopeProject, ProjectID: disabledProject.ID},
+		sealedWithCiphertext(41),
+	)
+	source.Organizations = append(source.Organizations, *disabledOrganization)
+	source.Projects = append(source.Projects, *disabledProject)
+	source.Credentials = append(source.Credentials, *organizationCredential, *projectCredential)
+
+	compiled, err := NewCompiler().Compile(source, fixedNow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	session := Session{snapshot: compiled}
+	for _, access := range []AccessContext{
+		{OrganizationID: disabledOrganization.ID, ProjectID: uuid.Must(uuid.NewV7())},
+		{OrganizationID: source.Organizations[0].ID, ProjectID: disabledProject.ID},
+	} {
+		if _, err := session.CredentialPool(access, source.Providers[0].ID); !errors.Is(err, ErrCredentialUnavailable) {
+			t.Fatalf("access=%+v error=%v", access, err)
+		}
+	}
+}
+
+func TestCredentialPoolUsesProjectThenOrganizationThenPlatform(t *testing.T) {
+	source := validOpenAISourceConfig(t)
+	providerID := source.Providers[0].ID
+	organizationID := source.Organizations[0].ID
+	projectID := source.Projects[0].ID
+	organizationCredential, _ := catalogmodel.NewProviderCredential(providerID, catalogmodel.Scope{Kind: catalogmodel.ScopeOrganization, OrganizationID: organizationID}, sealedWithCiphertext(20))
+	projectCredential, _ := catalogmodel.NewProviderCredential(providerID, catalogmodel.Scope{Kind: catalogmodel.ScopeProject, ProjectID: projectID}, sealedWithCiphertext(30))
+	source.Credentials = append(source.Credentials, *organizationCredential, *projectCredential)
+
+	compiled, err := NewCompiler().Compile(source, fixedNow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	access := AccessContext{OrganizationID: organizationID, ProjectID: projectID}
+	pool, err := (Session{snapshot: compiled}).CredentialPool(access, providerID)
+	if err != nil || pool.Key.ScopeKind != catalogmodel.ScopeProject || len(pool.Credentials) != 1 || pool.Credentials[0].CredentialID != projectCredential.ID {
+		t.Fatalf("project pool=%+v err=%v", pool, err)
+	}
+
+	source.Credentials[2].Status = sharedmodel.StatusDisabled
+	compiled, err = NewCompiler().Compile(source, fixedNow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pool, err = (Session{snapshot: compiled}).CredentialPool(access, providerID)
+	if err != nil || pool.Key.ScopeKind != catalogmodel.ScopeOrganization || pool.Credentials[0].CredentialID != organizationCredential.ID {
+		t.Fatalf("organization pool=%+v err=%v", pool, err)
+	}
+
+	source.Credentials[1].Status = sharedmodel.StatusDisabled
+	compiled, err = NewCompiler().Compile(source, fixedNow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pool, err = (Session{snapshot: compiled}).CredentialPool(access, providerID)
+	if err != nil || pool.Key.ScopeKind != catalogmodel.ScopePlatform || pool.Credentials[0].CredentialID != source.Credentials[0].ID {
+		t.Fatalf("platform pool=%+v err=%v", pool, err)
+	}
+}
+
+func TestCredentialSelectorSortsByUUIDAndReturnsDeepCopies(t *testing.T) {
+	source := validOpenAISourceConfig(t)
+	providerID := source.Providers[0].ID
+	first, _ := catalogmodel.NewProviderCredential(providerID, catalogmodel.Scope{Kind: catalogmodel.ScopeProject, ProjectID: source.Projects[0].ID}, sealedWithCiphertext(10))
+	second, _ := catalogmodel.NewProviderCredential(providerID, catalogmodel.Scope{Kind: catalogmodel.ScopeProject, ProjectID: source.Projects[0].ID}, sealedWithCiphertext(11))
+	if strings.Compare(first.ID.String(), second.ID.String()) > 0 {
+		first, second = second, first
+	}
+	wantFirstCiphertext := first.Sealed.Ciphertext[0]
+	source.Credentials = append(source.Credentials, *second, *first)
+	compiled, err := NewCompiler().Compile(source, fixedNow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first.Sealed.Ciphertext[0] = 98
+	session := Session{snapshot: compiled}
+	access := AccessContext{OrganizationID: source.Organizations[0].ID, ProjectID: source.Projects[0].ID}
+	selector := NewCredentialSelector()
+	selected, err := selector.Select(session, access, providerID)
+	if err != nil || selected.CredentialID != first.ID || selected.Sealed.Ciphertext[0] != wantFirstCiphertext {
+		t.Fatalf("first selection=%+v err=%v", selected, err)
+	}
+	selected.Sealed.Ciphertext[0] = 99
+	selected, err = selector.Select(session, access, providerID)
+	if err != nil || selected.CredentialID != second.ID || selected.Sealed.Ciphertext[0] == 99 {
+		t.Fatalf("second selection=%+v err=%v", selected, err)
+	}
+	pool, err := session.CredentialPool(access, providerID)
+	if err != nil || pool.Credentials[0].Sealed.Ciphertext[0] == 99 {
+		t.Fatalf("pool aliases selection: %+v err=%v", pool, err)
+	}
+}
+
+func TestCompilerRejectsCredentialWithMissingProvider(t *testing.T) {
+	source := validOpenAISourceConfig(t)
+	source.Credentials[0].ProviderID = uuid.Must(uuid.NewV7())
+	_, err := NewCompiler().Compile(source, fixedNow)
+	if err == nil || !strings.Contains(err.Error(), "Provider 不存在") {
+		t.Fatalf("error=%v", err)
 	}
 }
 
@@ -178,9 +276,9 @@ func validSourceConfig(t *testing.T) SourceConfig {
 	organization, _ := tenantmodel.NewOrganization("Acme")
 	project, _ := tenantmodel.NewProject(organization.ID, "Production")
 	key, _ := tenantmodel.NewVirtualKey(project.ID, "ci", [32]byte{1, 2, 3}, "llmp_v1_test", "body", nil)
-	provider, _ := catalogmodel.NewProvider("Fake", "fake")
+	provider, _ := catalogmodel.NewProvider("Fake", catalogmodel.ConnectorFake, "")
 	deployment, _ := catalogmodel.NewDeployment(
-		provider.ID, nil, "Fake", "fake-model", "fake", catalogmodel.Scope{Kind: catalogmodel.ScopePlatform},
+		provider.ID, "Fake", "fake-model", catalogmodel.UpstreamFake, catalogmodel.Scope{Kind: catalogmodel.ScopePlatform},
 		catalogmodel.CapabilitySet{Text: true, Streaming: true},
 	)
 	alias, _ := catalogmodel.NewModelAlias(project.ID, "assistant")
@@ -192,6 +290,38 @@ func validSourceConfig(t *testing.T) SourceConfig {
 		Deployments: []catalogmodel.Deployment{*deployment}, ModelAliases: []catalogmodel.ModelAlias{*alias},
 		RouteTargets: []catalogmodel.RouteTarget{*target},
 	}
+}
+
+func validOpenAISourceConfig(t *testing.T) SourceConfig {
+	t.Helper()
+	source := validSourceConfig(t)
+	provider, err := catalogmodel.NewProvider("OpenAI", catalogmodel.ConnectorOpenAI, "https://api.openai.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	credential, err := catalogmodel.NewProviderCredential(provider.ID, catalogmodel.Scope{Kind: catalogmodel.ScopePlatform}, testSealedCredential())
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployment, err := catalogmodel.NewDeployment(
+		provider.ID, "GPT-5", "gpt-5", catalogmodel.UpstreamResponses,
+		catalogmodel.Scope{Kind: catalogmodel.ScopePlatform}, catalogmodel.CapabilitySet{Text: true, Streaming: true},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	source.Providers = []catalogmodel.Provider{*provider}
+	source.Credentials = []catalogmodel.ProviderCredential{*credential}
+	source.Deployments = []catalogmodel.Deployment{*deployment}
+	source.RouteTargets[0].DeploymentID = deployment.ID
+	source.VirtualKeys[0].Hash = sha256.Sum256([]byte(snapshotTestVirtualKey))
+	return source
+}
+
+func sealedWithCiphertext(value byte) catalogmodel.SealedCredential {
+	sealed := testSealedCredential()
+	sealed.Ciphertext = []byte{value}
+	return sealed
 }
 
 func testSealedCredential() catalogmodel.SealedCredential {

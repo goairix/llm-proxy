@@ -487,9 +487,10 @@ func collectEvents(t *testing.T, stream interface {
 
 func validInvocation() gatewayport.Invocation {
 	return gatewayport.Invocation{
-		Request: validRequest(),
+		Request:  validRequest(),
+		Provider: gatewaysnapshot.Provider{ID: uuid.Must(uuid.NewV7()), ConnectorType: "fake"},
 		Deployment: gatewaysnapshot.Deployment{
-			ID: uuid.Must(uuid.NewV7()), ConnectorType: "fake", UpstreamModel: "fake-model",
+			ID: uuid.Must(uuid.NewV7()), UpstreamModel: "fake-model",
 		},
 		Revision: 7,
 	}
@@ -534,13 +535,34 @@ func fixedIDs(ids ...uuid.UUID) func() (uuid.UUID, error) {
 func TestFakeOutputDoesNotContainCredentialOrVirtualKey(t *testing.T) {
 	connector := New(Options{IDGenerator: fixedIDs(uuid.Must(uuid.NewV7())), Clock: func() time.Time { return fakeNow }})
 	invocation := validInvocation()
-	invocation.Deployment.Credential = &gatewaysnapshot.CredentialEnvelope{Sealed: catalogSealedFixture()}
+	invocation.Credential = &gatewaysnapshot.CredentialEnvelope{Sealed: catalogSealedFixture()}
 	response, err := connector.Complete(context.Background(), invocation)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if strings.Contains(response.Content[0].Text.Text, "ciphertext-secret") {
 		t.Fatal("fake response leaked credential")
+	}
+}
+
+func TestResponseEventsEmitRefusalDeltas(t *testing.T) {
+	response := inference.Response{
+		ID: uuid.Must(uuid.NewV7()), Model: "assistant", CreatedAt: fakeNow,
+		Content:    []inference.ContentBlock{{Type: inference.ContentRefusal, Refusal: &inference.RefusalContent{Text: "无法协助"}}},
+		StopReason: inference.StopContentFilter,
+	}
+	events := responseEvents(response, 2)
+	if err := inference.ValidateEventSequence(events); err != nil {
+		t.Fatal(err)
+	}
+	var deltas []string
+	for _, event := range events {
+		if event.Type == inference.EventRefusalDelta {
+			deltas = append(deltas, event.RefusalDelta.Text)
+		}
+	}
+	if strings.Join(deltas, "") != "无法协助" {
+		t.Fatalf("refusal deltas=%q events=%+v", deltas, events)
 	}
 }
 

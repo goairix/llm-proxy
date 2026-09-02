@@ -57,7 +57,6 @@ type ProviderCredentialResult struct {
 	ID         uuid.UUID
 	ProviderID uuid.UUID
 	Scope      catalogmodel.Scope
-	KeyVersion string
 	Status     sharedmodel.Status
 	CreatedAt  time.Time
 	UpdatedAt  time.Time

@@ -106,6 +106,22 @@ func (r *Runtime) Transport(base http.RoundTripper) http.RoundTripper {
 	return sanitizingTransport{instrumented: instrumented}
 }
 
+// TransportFor instruments a managed upstream using only a fixed provider and endpoint route.
+func (r *Runtime) TransportFor(provider, endpoint string, base http.RoundTripper) http.RoundTripper {
+	info := routeInfo{provider: normalizeGatewayProvider(provider), endpoint: normalizeGatewayEndpoint(endpoint)}
+	return fixedRouteTransport{info: info, next: r.Transport(base)}
+}
+
+type fixedRouteTransport struct {
+	info routeInfo
+	next http.RoundTripper
+}
+
+func (t fixedRouteTransport) RoundTrip(request *http.Request) (*http.Response, error) {
+	ctx := context.WithValue(request.Context(), routeInfoContextKey, t.info)
+	return t.next.RoundTrip(request.Clone(ctx))
+}
+
 type sanitizingTransport struct {
 	instrumented http.RoundTripper
 }
@@ -118,7 +134,7 @@ func (t sanitizingTransport) RoundTrip(request *http.Request) (*http.Response, e
 		requestURI: request.RequestURI,
 	})
 	sanitized := request.Clone(ctx)
-	sanitized.URL = sanitizedURL(request.URL, info)
+	sanitized.URL = sanitizedOutboundURL(request.URL, info)
 	sanitized.RequestURI = ""
 	return t.instrumented.RoundTrip(sanitized)
 }
@@ -182,6 +198,14 @@ func sanitizedURL(original *url.URL, info routeInfo) *url.URL {
 	return sanitized
 }
 
+func sanitizedOutboundURL(original *url.URL, info routeInfo) *url.URL {
+	sanitized := sanitizedURL(original, info)
+	sanitized.Scheme = "https"
+	sanitized.Host = "upstream.invalid"
+	sanitized.Opaque = ""
+	return sanitized
+}
+
 func cloneURL(original *url.URL) *url.URL {
 	if original == nil {
 		return &url.URL{}
@@ -204,12 +228,28 @@ func normalizeProvider(provider string) string {
 	return "unknown"
 }
 
+func normalizeGatewayProvider(provider string) string {
+	if provider == "openai" || provider == "openai_compatible" {
+		return provider
+	}
+	return "unknown"
+}
+
+func normalizeGatewayEndpoint(endpoint string) string {
+	if endpoint == "responses" || endpoint == "chat.completions" {
+		return endpoint
+	}
+	return "other"
+}
+
 func normalizeEndpoint(provider, path string) string {
 	provider = normalizeProvider(provider)
 	switch provider {
 	case "openai":
 		switch path {
 		case "/openai/v1/responses":
+			return "responses"
+		case "/v1/responses":
 			return "responses"
 		case "/openai/v1/responses/compact":
 			return "responses.compact"

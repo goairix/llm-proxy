@@ -2,15 +2,32 @@ package provider
 
 import (
 	"context"
+	"fmt"
 
 	appRuntime "github.com/goairix/llm-proxy/internal/application/runtime"
 	"github.com/goairix/llm-proxy/internal/infrastructure/config"
 	infralogger "github.com/goairix/llm-proxy/internal/infrastructure/logger"
 	"github.com/goairix/llm-proxy/internal/infrastructure/observability"
 	"github.com/goairix/llm-proxy/internal/infrastructure/proxy/tokenusage"
+	credentialsecurity "github.com/goairix/llm-proxy/internal/infrastructure/security/credential"
 	"github.com/goairix/llm-proxy/internal/interfaces/http/handler/dashboard"
 	"go.uber.org/zap"
 )
+
+type CredentialCipherRuntime struct{ Cipher *credentialsecurity.Cipher }
+
+func NewCredentialCipherRuntime(cfg *config.Config) (*CredentialCipherRuntime, error) {
+	runtime := &CredentialCipherRuntime{}
+	if cfg == nil || !cfg.Gateway.Enabled {
+		return runtime, nil
+	}
+	cipher, err := credentialsecurity.NewCipher(cfg.CredentialEncryption.CurrentKeyVersion, cfg.CredentialEncryption.Keys)
+	if err != nil {
+		return nil, fmt.Errorf("create shared credential cipher: %w", err)
+	}
+	runtime.Cipher = cipher
+	return runtime, nil
+}
 
 // NewLogger creates the process logger from infrastructure configuration.
 func NewLogger(cfg *config.Config) (*zap.Logger, error) {

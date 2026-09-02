@@ -208,9 +208,9 @@ func sourceForRevision(t *testing.T, revision int64) gatewaysnapshot.SourceConfi
 	}
 	project, _ := tenancymodel.NewProject(organization.ID, "Production")
 	key, _ := tenancymodel.NewVirtualKey(project.ID, "ci", [32]byte{1, byte(revision + 1)}, "llmp_v1_test", "test", nil)
-	provider, _ := catalogmodel.NewProvider("Fake", "fake")
+	provider, _ := catalogmodel.NewProvider("Fake", catalogmodel.ConnectorFake, "")
 	deployment, _ := catalogmodel.NewDeployment(
-		provider.ID, nil, "Fake", "fake-model", "fake", catalogmodel.Scope{Kind: catalogmodel.ScopePlatform},
+		provider.ID, "Fake", "fake-model", catalogmodel.UpstreamFake, catalogmodel.Scope{Kind: catalogmodel.ScopePlatform},
 		catalogmodel.CapabilitySet{Text: true, Streaming: true},
 	)
 	alias, _ := catalogmodel.NewModelAlias(project.ID, "assistant")

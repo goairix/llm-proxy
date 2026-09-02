@@ -1,0 +1,27 @@
+{
+  "id": "chatcmpl-upstream",
+  "object": "chat.completion",
+  "created": 123,
+  "model": "gpt-upstream",
+  "choices": [
+    {
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "content": "hello",
+        "refusal": "cannot comply",
+        "tool_calls": [
+          {"id":"call_one","type":"function","function":{"name":"weather","arguments":"{\"city\":\"Shanghai\"}"}},
+          {"id":"call_two","type":"function","function":{"name":"clock","arguments":"{\"zone\":\"Asia/Shanghai\"}"}}
+        ]
+      },
+      "finish_reason": "tool_calls"
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 11,
+    "completion_tokens": 7,
+    "total_tokens": 18,
+    "prompt_tokens_details": {"cached_tokens": 3}
+  }
+}

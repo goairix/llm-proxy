@@ -6,6 +6,7 @@ type Provider struct {
 	BaseEntity
 	Name          string `gorm:"type:varchar(255);not null"`
 	ConnectorType string `gorm:"type:varchar(64);not null;index:idx_providers_connector_type"`
+	BaseURL       string `gorm:"type:text;not null;default:''"`
 	Status        string `gorm:"type:varchar(32);not null;index:idx_providers_status"`
 }
 
@@ -29,16 +30,15 @@ func (ProviderCredential) TableName() string { return "provider_credentials" }
 
 type Deployment struct {
 	BaseEntity
-	ProviderID     uuid.UUID  `gorm:"type:uuid;not null;index:idx_deployments_provider_id"`
-	CredentialID   *uuid.UUID `gorm:"type:uuid;index:idx_deployments_credential_id"`
-	Name           string     `gorm:"type:varchar(255);not null"`
-	UpstreamModel  string     `gorm:"type:varchar(255);not null"`
-	ConnectorType  string     `gorm:"type:varchar(64);not null;index:idx_deployments_connector_type"`
-	ScopeKind      string     `gorm:"type:varchar(32);not null;index:idx_deployments_scope"`
-	OrganizationID *uuid.UUID `gorm:"type:uuid;index:idx_deployments_organization_id"`
-	ProjectID      *uuid.UUID `gorm:"type:uuid;index:idx_deployments_project_id"`
-	Capabilities   string     `gorm:"type:text;not null"`
-	Status         string     `gorm:"type:varchar(32);not null;index:idx_deployments_status"`
+	ProviderID       uuid.UUID  `gorm:"type:uuid;not null;index:idx_deployments_provider_id"`
+	Name             string     `gorm:"type:varchar(255);not null"`
+	UpstreamModel    string     `gorm:"type:varchar(255);not null"`
+	UpstreamProtocol string     `gorm:"type:varchar(32);not null;default:'';index:idx_deployments_upstream_protocol"`
+	ScopeKind        string     `gorm:"type:varchar(32);not null;index:idx_deployments_scope"`
+	OrganizationID   *uuid.UUID `gorm:"type:uuid;index:idx_deployments_organization_id"`
+	ProjectID        *uuid.UUID `gorm:"type:uuid;index:idx_deployments_project_id"`
+	Capabilities     string     `gorm:"type:text;not null"`
+	Status           string     `gorm:"type:varchar(32);not null;index:idx_deployments_status"`
 }
 
 func (Deployment) TableName() string { return "deployments" }

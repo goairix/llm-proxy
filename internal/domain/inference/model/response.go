@@ -67,7 +67,7 @@ func (r Response) Validate() error {
 		if err := block.Validate(); err != nil {
 			return fmt.Errorf("response content block %d: %w", index, err)
 		}
-		if block.Type != ContentText && block.Type != ContentToolCall {
+		if block.Type != ContentText && block.Type != ContentToolCall && block.Type != ContentRefusal {
 			return fmt.Errorf("response content block %d has unsupported type %q", index, block.Type)
 		}
 	}

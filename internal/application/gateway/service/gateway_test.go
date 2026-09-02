@@ -1,6 +1,7 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
@@ -37,6 +38,102 @@ func TestCompleteUsesOneSnapshotSessionAndResolvedDeployment(t *testing.T) {
 	if fixture.connector.invocation.Deployment.ID != fixture.deploymentID || fixture.connector.invocation.Revision != 7 {
 		t.Fatalf("invocation=%+v", fixture.connector.invocation)
 	}
+	if fixture.connector.invocation.Provider.ConnectorType != catalogmodel.ConnectorFake || fixture.connector.invocation.Credential != nil {
+		t.Fatalf("fake invocation=%+v", fixture.connector.invocation)
+	}
+}
+
+func TestGatewayPreparesProviderAndScopedCredentialWithoutVirtualKey(t *testing.T) {
+	fixture := newGatewayFixture(t, catalogmodel.CapabilitySet{Text: true})
+	fixture.configureOpenAIProvider(t, catalogmodel.Scope{Kind: catalogmodel.ScopePlatform})
+
+	_, err := fixture.gateway.Complete(context.Background(), fixture.virtualKey, validRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	invocation := fixture.connector.invocation
+	if invocation.Provider.BaseURL != "https://api.openai.com" || invocation.Provider.ConnectorType != catalogmodel.ConnectorOpenAI || invocation.Credential == nil {
+		t.Fatalf("invocation=%+v", invocation)
+	}
+	encoded, err := json.Marshal(invocation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(encoded, []byte(fixture.virtualKey)) {
+		t.Fatal("Virtual Key leaked into Connector Invocation")
+	}
+	if fixture.store.beginCalls != 1 {
+		t.Fatalf("snapshot Begin calls=%d", fixture.store.beginCalls)
+	}
+}
+
+func TestGatewayMapsParameterUnsupportedAcrossStreamLifecycle(t *testing.T) {
+	request := validRequest()
+	request.Stream = true
+
+	fixture := newGatewayFixture(t, catalogmodel.CapabilitySet{Text: true, Streaming: true})
+	fixture.connector.streamErr = &gatewayport.ConnectorError{Kind: gatewayport.ParameterUnsupported, Param: "stop"}
+	_, err := fixture.gateway.Stream(context.Background(), fixture.virtualKey, request)
+	gatewayError := assertGatewayErrorCode(t, err, CapabilityUnsupported)
+	if gatewayError.Param != "stop" {
+		t.Fatalf("stream creation param=%q", gatewayError.Param)
+	}
+
+	fixture = newGatewayFixture(t, catalogmodel.CapabilitySet{Text: true, Streaming: true})
+	fixture.connector.stream = &sliceStream{recvErr: &gatewayport.ConnectorError{Kind: gatewayport.ParameterUnsupported, Param: "temperature"}}
+	stream, err := fixture.gateway.Stream(context.Background(), fixture.virtualKey, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = stream.Recv(context.Background())
+	gatewayError = assertGatewayErrorCode(t, err, CapabilityUnsupported)
+	if gatewayError.Param != "temperature" {
+		t.Fatalf("stream Recv param=%q", gatewayError.Param)
+	}
+}
+
+func TestGatewayRejectsMissingProviderCredentialBeforeConnector(t *testing.T) {
+	fixture := newGatewayFixture(t, catalogmodel.CapabilitySet{Text: true})
+	fixture.configureOpenAIProvider(t, catalogmodel.Scope{Kind: catalogmodel.ScopePlatform})
+	fixture.source.Credentials = nil
+	fixture.publish(t)
+
+	_, err := fixture.gateway.Complete(context.Background(), fixture.virtualKey, validRequest())
+	gatewayError := assertGatewayErrorCode(t, err, ConnectorFailed)
+	if gatewayError.SafeMessage != "供应商凭据不可用" || fixture.connector.completeCalls != 0 {
+		t.Fatalf("error=%+v calls=%d", gatewayError, fixture.connector.completeCalls)
+	}
+}
+
+func TestGatewayMapsConnectorErrorKinds(t *testing.T) {
+	tests := []struct {
+		kind  gatewayport.ConnectorErrorKind
+		code  ErrorCode
+		param string
+	}{
+		{kind: gatewayport.ParameterUnsupported, code: CapabilityUnsupported, param: "stop"},
+		{kind: gatewayport.UpstreamAuthentication, code: ConnectorFailed},
+		{kind: gatewayport.UpstreamRateLimited, code: ConnectorFailed},
+		{kind: gatewayport.UpstreamTimeout, code: ConnectorFailed},
+		{kind: gatewayport.UpstreamUnavailable, code: ConnectorFailed},
+		{kind: gatewayport.UpstreamRequestRejected, code: ConnectorFailed},
+		{kind: gatewayport.UpstreamInvalidResponse, code: ConnectorFailed},
+		{kind: gatewayport.CredentialUnavailable, code: ConnectorFailed},
+	}
+	for _, test := range tests {
+		t.Run(string(test.kind), func(t *testing.T) {
+			fixture := newGatewayFixture(t, catalogmodel.CapabilitySet{Text: true})
+			fixture.connector.completeErr = &gatewayport.ConnectorError{Kind: test.kind, Param: test.param, Cause: context.DeadlineExceeded}
+			_, err := fixture.gateway.Complete(context.Background(), fixture.virtualKey, validRequest())
+			gatewayError := assertGatewayErrorCode(t, err, test.code)
+			if gatewayError.Param != test.param {
+				t.Fatalf("param=%q want=%q", gatewayError.Param, test.param)
+			}
+			if !errors.Is(err, context.DeadlineExceeded) {
+				t.Fatal("connector cause was not preserved")
+			}
+		})
+	}
 }
 
 func TestGatewayValidatesBeforeOpeningSnapshot(t *testing.T) {
@@ -53,7 +150,7 @@ func TestGatewayValidatesBeforeOpeningSnapshot(t *testing.T) {
 
 func TestGatewayMapsSnapshotAuthenticationAndRouteErrors(t *testing.T) {
 	emptyStore := &countingStore{store: gatewaysnapshot.NewStore()}
-	gateway := New(emptyStore, registry{})
+	gateway := New(emptyStore, registry{}, gatewaysnapshot.NewCredentialSelector())
 	_, err := gateway.Complete(context.Background(), "missing", validRequest())
 	assertGatewayErrorCode(t, err, GatewayNotReady)
 
@@ -121,7 +218,7 @@ func TestGatewayRejectsUnsupportedCapabilitiesBeforeConnector(t *testing.T) {
 
 func TestGatewayRejectsMissingConnectorAndPreservesConnectorCause(t *testing.T) {
 	fixture := newGatewayFixture(t, catalogmodel.CapabilitySet{Text: true})
-	fixture.gateway = New(fixture.store, registry{})
+	fixture.gateway = New(fixture.store, registry{}, gatewaysnapshot.NewCredentialSelector())
 	_, err := fixture.gateway.Complete(context.Background(), fixture.virtualKey, validRequest())
 	assertGatewayErrorCode(t, err, InternalError)
 
@@ -273,6 +370,7 @@ type gatewayFixture struct {
 	virtualKey   string
 	projectID    uuid.UUID
 	deploymentID uuid.UUID
+	source       gatewaysnapshot.SourceConfig
 }
 
 func newGatewayFixture(t *testing.T, capabilities catalogmodel.CapabilitySet) *gatewayFixture {
@@ -281,9 +379,9 @@ func newGatewayFixture(t *testing.T, capabilities catalogmodel.CapabilitySet) *g
 	organization, _ := tenancymodel.NewOrganization("Acme")
 	project, _ := tenancymodel.NewProject(organization.ID, "Production")
 	key, _ := tenancymodel.NewVirtualKey(project.ID, "ci", sha256.Sum256([]byte(virtualKey)), "llmp_v1_gateway", "cret", nil)
-	provider, _ := catalogmodel.NewProvider("Fake", "fake")
+	provider, _ := catalogmodel.NewProvider("Fake", catalogmodel.ConnectorFake, "")
 	deployment, err := catalogmodel.NewDeployment(
-		provider.ID, nil, "fake", "fake-model", "fake", catalogmodel.Scope{Kind: catalogmodel.ScopePlatform}, capabilities,
+		provider.ID, "fake", "fake-model", catalogmodel.UpstreamFake, catalogmodel.Scope{Kind: catalogmodel.ScopePlatform}, capabilities,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -310,8 +408,49 @@ func newGatewayFixture(t *testing.T, capabilities catalogmodel.CapabilitySet) *g
 		StopReason: inference.StopEndTurn, CreatedAt: time.Now().UTC(),
 	}}
 	return &gatewayFixture{
-		gateway: New(counted, registry{"fake": connector}), store: counted, connector: connector,
-		virtualKey: virtualKey, projectID: project.ID, deploymentID: deployment.ID,
+		gateway: New(counted, registry{"fake": connector}, gatewaysnapshot.NewCredentialSelector()), store: counted, connector: connector,
+		virtualKey: virtualKey, projectID: project.ID, deploymentID: deployment.ID, source: source,
+	}
+}
+
+func (f *gatewayFixture) configureOpenAIProvider(t *testing.T, scope catalogmodel.Scope) {
+	t.Helper()
+	provider, err := catalogmodel.NewProvider("OpenAI", catalogmodel.ConnectorOpenAI, "https://api.openai.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	credential, err := catalogmodel.NewProviderCredential(provider.ID, scope, testGatewaySealedCredential())
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployment, err := catalogmodel.NewDeployment(
+		provider.ID, "GPT-5", "gpt-5", catalogmodel.UpstreamResponses, scope, catalogmodel.CapabilitySet{Text: true},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.source.Providers = []catalogmodel.Provider{*provider}
+	f.source.Credentials = []catalogmodel.ProviderCredential{*credential}
+	f.source.Deployments = []catalogmodel.Deployment{*deployment}
+	f.source.RouteTargets[0].DeploymentID = deployment.ID
+	f.deploymentID = deployment.ID
+	f.publish(t)
+	f.gateway = New(f.store, registry{catalogmodel.ConnectorOpenAI: f.connector}, gatewaysnapshot.NewCredentialSelector())
+}
+
+func (f *gatewayFixture) publish(t *testing.T) {
+	t.Helper()
+	f.source.Revision++
+	compiled, err := gatewaysnapshot.NewCompiler().Compile(f.source, time.Now().UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.store.store.Publish(compiled)
+}
+
+func testGatewaySealedCredential() catalogmodel.SealedCredential {
+	return catalogmodel.SealedCredential{
+		KeyVersion: "v1", WrappedKeyNonce: []byte{1}, WrappedDataKey: []byte{2}, PayloadNonce: []byte{3}, Ciphertext: []byte{4},
 	}
 }
 

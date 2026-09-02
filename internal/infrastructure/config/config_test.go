@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 var configEnvNames = []string{
@@ -30,6 +31,14 @@ var configEnvNames = []string{
 	"LLM_PROXY_GATEWAY_SNAPSHOT_INTERVAL",
 	"LLM_PROXY_GATEWAY_SNAPSHOT_TIMEOUT",
 	"LLM_PROXY_GATEWAY_RETRY_BACKOFF",
+	"LLM_PROXY_GATEWAY_UPSTREAM_CONNECT_TIMEOUT",
+	"LLM_PROXY_GATEWAY_UPSTREAM_TLS_HANDSHAKE_TIMEOUT",
+	"LLM_PROXY_GATEWAY_UPSTREAM_RESPONSE_HEADER_TIMEOUT",
+	"LLM_PROXY_GATEWAY_UPSTREAM_COMPLETE_TIMEOUT",
+	"LLM_PROXY_GATEWAY_UPSTREAM_STREAM_IDLE_TIMEOUT",
+	"LLM_PROXY_GATEWAY_UPSTREAM_IDLE_CONNECTION_TIMEOUT",
+	"LLM_PROXY_GATEWAY_UPSTREAM_MAX_IDLE_CONNECTIONS",
+	"LLM_PROXY_GATEWAY_UPSTREAM_MAX_IDLE_CONNECTIONS_PER_HOST",
 	"LLM_PROXY_DATABASE_DRIVER",
 	"LLM_PROXY_DATABASE_DSN",
 	"LLM_PROXY_DATABASE_MAX_IDLE_CONNECTIONS",
@@ -486,6 +495,65 @@ func TestLoadGatewayDefaultsDisabled(t *testing.T) {
 	}
 	if cfg.Database.Driver != "postgres" {
 		t.Fatalf("Database.Driver = %q, want postgres", cfg.Database.Driver)
+	}
+	upstream := cfg.Gateway.Upstream
+	if upstream.ConnectTimeout != 10*time.Second || upstream.TLSHandshakeTimeout != 10*time.Second ||
+		upstream.ResponseHeaderTimeout != 30*time.Second || upstream.CompleteTimeout != 5*time.Minute ||
+		upstream.StreamIdleTimeout != 5*time.Minute || upstream.IdleConnectionTimeout != 90*time.Second ||
+		upstream.MaxIdleConnections != 100 || upstream.MaxIdleConnectionsPerHost != 10 {
+		t.Fatalf("Gateway.Upstream=%+v", upstream)
+	}
+}
+
+func TestLoadGatewayUpstreamEnvironment(t *testing.T) {
+	workDir := isolateConfigEnvironment(t)
+	values := map[string]string{
+		"LLM_PROXY_GATEWAY_UPSTREAM_CONNECT_TIMEOUT":               "11s",
+		"LLM_PROXY_GATEWAY_UPSTREAM_TLS_HANDSHAKE_TIMEOUT":         "12s",
+		"LLM_PROXY_GATEWAY_UPSTREAM_RESPONSE_HEADER_TIMEOUT":       "13s",
+		"LLM_PROXY_GATEWAY_UPSTREAM_COMPLETE_TIMEOUT":              "6m",
+		"LLM_PROXY_GATEWAY_UPSTREAM_STREAM_IDLE_TIMEOUT":           "7m",
+		"LLM_PROXY_GATEWAY_UPSTREAM_IDLE_CONNECTION_TIMEOUT":       "2m",
+		"LLM_PROXY_GATEWAY_UPSTREAM_MAX_IDLE_CONNECTIONS":          "120",
+		"LLM_PROXY_GATEWAY_UPSTREAM_MAX_IDLE_CONNECTIONS_PER_HOST": "12",
+	}
+	for name, value := range values {
+		t.Setenv(name, value)
+	}
+	cfg, err := Load(filepath.Join(workDir, "missing.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	upstream := cfg.Gateway.Upstream
+	if upstream.ConnectTimeout != 11*time.Second || upstream.TLSHandshakeTimeout != 12*time.Second ||
+		upstream.ResponseHeaderTimeout != 13*time.Second || upstream.CompleteTimeout != 6*time.Minute ||
+		upstream.StreamIdleTimeout != 7*time.Minute || upstream.IdleConnectionTimeout != 2*time.Minute ||
+		upstream.MaxIdleConnections != 120 || upstream.MaxIdleConnectionsPerHost != 12 {
+		t.Fatalf("Gateway.Upstream=%+v", upstream)
+	}
+}
+
+func TestLoadRejectsInvalidGatewayUpstreamEnvironment(t *testing.T) {
+	for _, test := range []struct{ name, value string }{
+		{name: "LLM_PROXY_GATEWAY_UPSTREAM_CONNECT_TIMEOUT", value: "invalid"},
+		{name: "LLM_PROXY_GATEWAY_UPSTREAM_TLS_HANDSHAKE_TIMEOUT", value: "invalid"},
+		{name: "LLM_PROXY_GATEWAY_UPSTREAM_RESPONSE_HEADER_TIMEOUT", value: "invalid"},
+		{name: "LLM_PROXY_GATEWAY_UPSTREAM_COMPLETE_TIMEOUT", value: "invalid"},
+		{name: "LLM_PROXY_GATEWAY_UPSTREAM_STREAM_IDLE_TIMEOUT", value: "invalid"},
+		{name: "LLM_PROXY_GATEWAY_UPSTREAM_IDLE_CONNECTION_TIMEOUT", value: "invalid"},
+		{name: "LLM_PROXY_GATEWAY_UPSTREAM_MAX_IDLE_CONNECTIONS", value: "invalid"},
+		{name: "LLM_PROXY_GATEWAY_UPSTREAM_MAX_IDLE_CONNECTIONS_PER_HOST", value: "invalid"},
+		{name: "LLM_PROXY_GATEWAY_UPSTREAM_CONNECT_TIMEOUT", value: "0s"},
+		{name: "LLM_PROXY_GATEWAY_UPSTREAM_MAX_IDLE_CONNECTIONS", value: "0"},
+	} {
+		t.Run(test.name+"="+test.value, func(t *testing.T) {
+			workDir := isolateConfigEnvironment(t)
+			t.Setenv(test.name, test.value)
+			_, err := Load(filepath.Join(workDir, "missing.yaml"))
+			if err == nil {
+				t.Fatalf("Load() accepted %s=%s", test.name, test.value)
+			}
+		})
 	}
 }
 

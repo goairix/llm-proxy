@@ -167,6 +167,45 @@ func TestEncodeResponseMapsContentStopAndUsage(t *testing.T) {
 	}
 }
 
+func TestEncodeResponseAndStreamMapRefusalAsText(t *testing.T) {
+	response := validResponse()
+	response.Content = []inference.ContentBlock{{Type: inference.ContentRefusal, Refusal: &inference.RefusalContent{Text: "无法协助"}}}
+	response.StopReason = inference.StopContentFilter
+	var output bytes.Buffer
+	if err := EncodeResponse(&output, response); err != nil {
+		t.Fatal(err)
+	}
+	var decoded struct {
+		StopReason string `json:"stop_reason"`
+		Content    []struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		} `json:"content"`
+	}
+	if err := json.Unmarshal(output.Bytes(), &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if decoded.StopReason != "refusal" || len(decoded.Content) != 1 || decoded.Content[0].Type != "text" || decoded.Content[0].Text != "无法协助" {
+		t.Fatalf("response=%s", output.String())
+	}
+
+	writer := &flushBuffer{}
+	events := []inference.Event{
+		inference.NewResponseStartAt(response.ID, response.Model, response.CreatedAt),
+		inference.NewContentBlockStart(0, inference.ContentRefusal),
+		inference.NewRefusalDelta(0, "无法协助"),
+		inference.NewContentBlockStop(0),
+		inference.NewResponseFinish(inference.StopContentFilter),
+	}
+	if err := EncodeStream(context.Background(), writer, &sliceStream{events: events}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(writer.String(), `"type":"text_delta","text":"无法协助"`) ||
+		!strings.Contains(writer.String(), `"stop_reason":"refusal"`) {
+		t.Fatalf("stream=%s", writer.String())
+	}
+}
+
 func TestEncodeStreamMatchesGoldenAndFlushesEveryEvent(t *testing.T) {
 	response := validResponse()
 	events := []inference.Event{

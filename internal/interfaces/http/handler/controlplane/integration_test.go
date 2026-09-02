@@ -18,6 +18,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/goairix/llm-proxy/internal/di/provider"
+	catalogmodel "github.com/goairix/llm-proxy/internal/domain/catalog/model"
 	"github.com/goairix/llm-proxy/internal/infrastructure/config"
 	"github.com/goairix/llm-proxy/internal/infrastructure/persistence/database"
 	"github.com/goairix/llm-proxy/internal/infrastructure/persistence/entity"
@@ -71,7 +72,11 @@ func TestControlPlaneIntegrationWithPostgresStoresOnlyProtectedSecrets(t *testin
 		CredentialEncryption: config.CredentialEncryptionConfig{CurrentKeyVersion: "v1", Keys: map[string]string{"v1": keyring}},
 	}
 	gateway := provider.NewGatewayRuntime(cfg, zap.NewNop())
-	runtime, err := provider.NewControlPlaneRuntime(cfg, gateway)
+	cipherRuntime, err := provider.NewCredentialCipherRuntime(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := provider.NewControlPlaneRuntime(cfg, gateway, cipherRuntime)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -90,10 +95,11 @@ func TestControlPlaneIntegrationWithPostgresStoresOnlyProtectedSecrets(t *testin
 	organization := postResource(t, handler, "/v1/organizations", `{"name":"Acme"}`)
 	project := postResource(t, handler, "/v1/organizations/"+organization.ID.String()+"/projects", `{"name":"Production"}`)
 	virtualKey := postResource(t, handler, "/v1/projects/"+project.ID.String()+"/virtual-keys", `{"name":"ci"}`)
-	providerResource := postResource(t, handler, "/v1/providers", `{"name":"Fake","connector_type":"fake"}`)
+	providerResource := postResource(t, handler, "/v1/providers", `{"name":"OpenAI","connector_type":"openai","base_url":"https://api.openai.com/"}`)
 	credentialBody := fmt.Sprintf(`{"provider_id":%q,"scope":{"kind":"platform"},"credential":{"api_key":"provider-secret-integration"}}`, providerResource.ID)
 	credential := postResource(t, handler, "/v1/provider-credentials", credentialBody)
-	deploymentBody := fmt.Sprintf(`{"provider_id":%q,"name":"fake-primary","upstream_model":"fake-model","connector_type":"fake","scope":{"kind":"platform"},"capabilities":{"text":true,"streaming":true}}`, providerResource.ID)
+	fakeProvider := postResource(t, handler, "/v1/providers", `{"name":"Fake","connector_type":"fake","base_url":""}`)
+	deploymentBody := fmt.Sprintf(`{"provider_id":%q,"name":"fake-primary","upstream_model":"fake-model","upstream_protocol":"fake","scope":{"kind":"platform"},"capabilities":{"text":true,"streaming":true}}`, fakeProvider.ID)
 	deployment := postResource(t, handler, "/v1/deployments", deploymentBody)
 	aliasBody := fmt.Sprintf(`{"project_id":%q,"name":"assistant"}`, project.ID)
 	modelAlias := postResource(t, handler, "/v1/model-aliases", aliasBody)
@@ -122,7 +128,11 @@ func TestControlPlaneIntegrationWithPostgresStoresOnlyProtectedSecrets(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	if access.ProjectID != project.ID || plan.Deployment.ID != deployment.ID || plan.Deployment.ConnectorType != "fake" {
+	providerPlan, err := session.Provider(plan.Deployment.ProviderID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if access.ProjectID != project.ID || plan.Deployment.ID != deployment.ID || providerPlan.ConnectorType != catalogmodel.ConnectorFake {
 		t.Fatalf("shared gateway snapshot access=%+v plan=%+v", access, plan)
 	}
 	disabledAlias := patchResource(t, handler, "/v1/model-aliases/"+modelAlias.ID.String(), `{"status":"disabled"}`)
@@ -161,7 +171,7 @@ func TestControlPlaneIntegrationWithPostgresStoresOnlyProtectedSecrets(t *testin
 	if virtualKey.Secret == "" {
 		t.Fatal("virtual key create response did not contain the one-time secret")
 	}
-	if modelAlias.Revision != 7 || target.Revision != 8 || activatedAlias.Revision != 9 || disabledAlias.Revision != 10 || disabledTarget.Revision != 11 || preparedTarget.Revision != 12 || reactivatedAlias.Revision != 13 || !strings.Contains(modelAlias.Body, `"status":"disabled"`) || !strings.Contains(disabledTarget.Body, `"status":"disabled"`) {
+	if modelAlias.Revision != 8 || target.Revision != 9 || activatedAlias.Revision != 10 || disabledAlias.Revision != 11 || disabledTarget.Revision != 12 || preparedTarget.Revision != 13 || reactivatedAlias.Revision != 14 || !strings.Contains(modelAlias.Body, `"status":"disabled"`) || !strings.Contains(disabledTarget.Body, `"status":"disabled"`) {
 		t.Fatalf(
 			"route lifecycle: alias_create=%d target_create=%d alias_activate=%d alias_disable=%d target_disable=%d target_prepare=%d alias_reactivate=%d alias_body=%s target_body=%s",
 			modelAlias.Revision, target.Revision, activatedAlias.Revision, disabledAlias.Revision, disabledTarget.Revision, preparedTarget.Revision, reactivatedAlias.Revision, modelAlias.Body, disabledTarget.Body,

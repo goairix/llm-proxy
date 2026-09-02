@@ -48,9 +48,20 @@ func TestCredentialMapperPreservesEncryptedBytes(t *testing.T) {
 	}
 }
 
-func TestDeploymentMapperPreservesCapabilities(t *testing.T) {
+func TestProviderAndDeploymentMappersPreserveConnectorConfiguration(t *testing.T) {
 	capabilities := catalogmodel.CapabilitySet{Text: true, Tools: true, Streaming: true}
-	deployment, err := catalogmodel.NewDeployment(uuid.Must(uuid.NewV7()), nil, "fake", "fake-model", "fake", catalogmodel.Scope{Kind: catalogmodel.ScopePlatform}, capabilities)
+	provider, err := catalogmodel.NewProvider("OpenAI", catalogmodel.ConnectorOpenAI, "https://api.openai.com/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	mappedProvider, err := providerToDomain(providerToEntity(provider))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mappedProvider.BaseURL != "https://api.openai.com" || mappedProvider.ConnectorType != catalogmodel.ConnectorOpenAI {
+		t.Fatalf("provider = %+v", mappedProvider)
+	}
+	deployment, err := catalogmodel.NewDeployment(provider.ID, "responses", "gpt-5", catalogmodel.UpstreamResponses, catalogmodel.Scope{Kind: catalogmodel.ScopePlatform}, capabilities)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -62,8 +73,20 @@ func TestDeploymentMapperPreservesCapabilities(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Capabilities != capabilities {
-		t.Fatalf("capabilities = %+v; want %+v", got.Capabilities, capabilities)
+	if got.Capabilities != capabilities || got.UpstreamProtocol != catalogmodel.UpstreamResponses || got.ProviderID != provider.ID {
+		t.Fatalf("deployment = %+v", got)
+	}
+}
+
+func TestProviderMapperRejectsInvalidPersistedBaseURL(t *testing.T) {
+	provider, err := catalogmodel.NewProvider("OpenAI", catalogmodel.ConnectorOpenAI, "https://api.openai.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	record := providerToEntity(provider)
+	record.BaseURL = "://invalid"
+	if _, err := providerToDomain(record); err == nil {
+		t.Fatal("invalid persisted BaseURL was accepted")
 	}
 }
 
@@ -73,7 +96,6 @@ func TestCatalogRepositoriesWithPostgres(t *testing.T) {
 	organizations := tenantrepo.NewOrganizationRepository(manager)
 	projects := tenantrepo.NewProjectRepository(manager)
 	providers := NewProviderRepository(manager)
-	credentials := NewProviderCredentialRepository(manager)
 	aliases := NewModelAliasRepository(manager)
 	targets := NewRouteTargetRepository(manager)
 	deployments := NewDeploymentRepository(manager)
@@ -81,13 +103,8 @@ func TestCatalogRepositoriesWithPostgres(t *testing.T) {
 
 	organization, _ := tenantmodel.NewOrganization("Acme")
 	project, _ := tenantmodel.NewProject(organization.ID, "Production")
-	provider, _ := catalogmodel.NewProvider("Fake", "fake")
-	deployment, _ := catalogmodel.NewDeployment(provider.ID, nil, "fake", "fake-model", "fake", catalogmodel.Scope{Kind: catalogmodel.ScopePlatform}, catalogmodel.CapabilitySet{Text: true})
-	credential, _ := catalogmodel.NewProviderCredential(provider.ID, catalogmodel.Scope{Kind: catalogmodel.ScopePlatform}, catalogmodel.SealedCredential{
-		KeyVersion: "v1", WrappedKeyNonce: []byte{1}, WrappedDataKey: []byte{2}, PayloadNonce: []byte{3}, Ciphertext: []byte{4},
-	})
-	credentialID := credential.ID
-	credentialDeployment, _ := catalogmodel.NewDeployment(provider.ID, &credentialID, "credential", "credential-model", "fake", catalogmodel.Scope{Kind: catalogmodel.ScopePlatform}, catalogmodel.CapabilitySet{Text: true})
+	provider, _ := catalogmodel.NewProvider("Fake", catalogmodel.ConnectorFake, "")
+	deployment, _ := catalogmodel.NewDeployment(provider.ID, "fake", "fake-model", catalogmodel.UpstreamFake, catalogmodel.Scope{Kind: catalogmodel.ScopePlatform}, catalogmodel.CapabilitySet{Text: true})
 	alias, _ := catalogmodel.NewModelAlias(project.ID, "assistant")
 	target, _ := catalogmodel.NewRouteTarget(alias.ID, deployment.ID, 0, 100)
 	ctx := context.Background()
@@ -95,9 +112,7 @@ func TestCatalogRepositoriesWithPostgres(t *testing.T) {
 		func() error { return organizations.Save(ctx, organization) },
 		func() error { return projects.Save(ctx, project) },
 		func() error { return providers.Save(ctx, provider) },
-		func() error { return credentials.Save(ctx, credential) },
 		func() error { return deployments.Save(ctx, deployment) },
-		func() error { return deployments.Save(ctx, credentialDeployment) },
 		func() error { return aliases.Save(ctx, alias) },
 		func() error { return targets.Save(ctx, target) },
 	} {
@@ -110,9 +125,6 @@ func TestCatalogRepositoriesWithPostgres(t *testing.T) {
 	}
 	if got, err := deployments.HasActiveByProvider(ctx, provider.ID); err != nil || !got {
 		t.Fatalf("active deployment by provider = %v, %v", got, err)
-	}
-	if got, err := deployments.HasActiveByCredential(ctx, credential.ID); err != nil || !got {
-		t.Fatalf("active deployment by credential = %v, %v", got, err)
 	}
 	if got, err := targets.HasActiveByDeployment(ctx, deployment.ID); err != nil || !got {
 		t.Fatalf("active target by deployment = %v, %v", got, err)

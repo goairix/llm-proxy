@@ -3,6 +3,8 @@ package snapshot
 import (
 	"sync"
 	"testing"
+
+	"github.com/google/uuid"
 )
 
 func TestStorePublishesWholeSnapshotsConcurrently(t *testing.T) {
@@ -72,6 +74,8 @@ func newSnapshotForTest(revision int64) *RuntimeSnapshot {
 		revision:    revision,
 		virtualKeys: make(map[[32]byte]AccessContext),
 		routes:      make(map[RouteKey]RoutePlan),
+		providers:   make(map[uuid.UUID]Provider),
+		credentials: make(map[CredentialPoolKey][]CredentialEnvelope),
 		compiled:    true,
 	}
 }

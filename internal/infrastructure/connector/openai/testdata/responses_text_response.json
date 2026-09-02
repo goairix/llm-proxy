@@ -1,0 +1,26 @@
+{
+  "id": "resp_upstream",
+  "status": "completed",
+  "model": "gpt-upstream",
+  "output": [
+    {
+      "type": "message",
+      "id": "msg_upstream",
+      "status": "completed",
+      "role": "assistant",
+      "content": [
+        {"type":"output_text","text":"hello","annotations":[]},
+        {"type":"refusal","refusal":"cannot comply"}
+      ]
+    },
+    {"type":"reasoning","id":"rs_upstream","summary":[]},
+    {"type":"function_call","id":"fc_upstream","call_id":"call_one","name":"weather","arguments":"{\"city\":\"Shanghai\"}","status":"completed"}
+  ],
+  "usage": {
+    "input_tokens": 20,
+    "output_tokens": 8,
+    "total_tokens": 28,
+    "input_tokens_details": {"cached_tokens": 4},
+    "output_tokens_details": {"reasoning_tokens": 3}
+  }
+}

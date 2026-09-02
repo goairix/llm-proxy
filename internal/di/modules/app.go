@@ -12,6 +12,7 @@ var AppSet = wire.NewSet(
 	provider.NewReadiness,
 	provider.NewStats,
 	provider.NewObserverFactory,
+	provider.NewCredentialCipherRuntime,
 	provider.NewOpenAIHandler,
 	provider.NewAnthropicHandler,
 	provider.NewGatewayRuntime,

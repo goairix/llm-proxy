@@ -150,6 +150,17 @@ gateway:
   # 数据库或快照暂时不可用时的重试退避时间
   retry_backoff: 5s
 
+  # 平台托管 Provider 的统一上游 HTTP Transport 参数。
+  upstream:
+    connect_timeout: 10s
+    tls_handshake_timeout: 10s
+    response_header_timeout: 30s
+    complete_timeout: 5m
+    stream_idle_timeout: 5m
+    idle_connection_timeout: 90s
+    max_idle_connections: 100
+    max_idle_connections_per_host: 10
+
 # -----------------------------------------------------------------------------
 # 数据库配置
 # -----------------------------------------------------------------------------

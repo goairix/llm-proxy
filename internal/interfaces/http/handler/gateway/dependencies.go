@@ -17,9 +17,11 @@ type Gateway interface {
 }
 
 type openAIHandler struct{ gateway Gateway }
+type responsesHandler struct{ gateway Gateway }
 type anthropicHandler struct{ gateway Gateway }
 
 func NewOpenAI(gateway Gateway) http.Handler    { return &openAIHandler{gateway: gateway} }
+func NewResponses(gateway Gateway) http.Handler { return &responsesHandler{gateway: gateway} }
 func NewAnthropic(gateway Gateway) http.Handler { return &anthropicHandler{gateway: gateway} }
 
 func unavailableGatewayError() error {

@@ -15,6 +15,7 @@ const (
 	EventResponseStart      EventType = "response_start"
 	EventContentBlockStart  EventType = "content_block_start"
 	EventTextDelta          EventType = "text_delta"
+	EventRefusalDelta       EventType = "refusal_delta"
 	EventToolCallStart      EventType = "tool_call_start"
 	EventToolArgumentsDelta EventType = "tool_arguments_delta"
 	EventContentBlockStop   EventType = "content_block_stop"
@@ -35,6 +36,11 @@ type ContentBlockStartEvent struct {
 }
 
 type TextDeltaEvent struct {
+	Index int
+	Text  string
+}
+
+type RefusalDeltaEvent struct {
 	Index int
 	Text  string
 }
@@ -71,6 +77,7 @@ type Event struct {
 	ResponseStart      *ResponseStartEvent
 	ContentBlockStart  *ContentBlockStartEvent
 	TextDelta          *TextDeltaEvent
+	RefusalDelta       *RefusalDeltaEvent
 	ToolCallStart      *ToolCallStartEvent
 	ToolArgumentsDelta *ToolArgumentsDeltaEvent
 	ContentBlockStop   *ContentBlockStopEvent
@@ -93,6 +100,10 @@ func NewContentBlockStart(index int, contentType ContentType) Event {
 
 func NewTextDelta(index int, delta string) Event {
 	return Event{Type: EventTextDelta, TextDelta: &TextDeltaEvent{Index: index, Text: delta}}
+}
+
+func NewRefusalDelta(index int, value string) Event {
+	return Event{Type: EventRefusalDelta, RefusalDelta: &RefusalDeltaEvent{Index: index, Text: value}}
 }
 
 func NewToolCallStart(index int, id, name string) Event {
@@ -122,7 +133,7 @@ func NewStreamError(message string) Event {
 func (e Event) Validate() error {
 	payloads := 0
 	for _, present := range []bool{
-		e.ResponseStart != nil, e.ContentBlockStart != nil, e.TextDelta != nil, e.ToolCallStart != nil,
+		e.ResponseStart != nil, e.ContentBlockStart != nil, e.TextDelta != nil, e.RefusalDelta != nil, e.ToolCallStart != nil,
 		e.ToolArgumentsDelta != nil, e.ContentBlockStop != nil, e.UsageUpdate != nil,
 		e.ResponseFinish != nil, e.StreamError != nil,
 	} {
@@ -140,12 +151,17 @@ func (e Event) Validate() error {
 			return fmt.Errorf("response start requires UUIDv7 id and model")
 		}
 	case EventContentBlockStart:
-		if e.ContentBlockStart == nil || e.ContentBlockStart.Index < 0 || e.ContentBlockStart.Type != ContentText {
-			return fmt.Errorf("content block start requires a non-negative text block index")
+		if e.ContentBlockStart == nil || e.ContentBlockStart.Index < 0 ||
+			(e.ContentBlockStart.Type != ContentText && e.ContentBlockStart.Type != ContentRefusal) {
+			return fmt.Errorf("content block start requires a non-negative text or refusal block index")
 		}
 	case EventTextDelta:
 		if e.TextDelta == nil || e.TextDelta.Index < 0 || e.TextDelta.Text == "" {
 			return fmt.Errorf("text delta requires a non-negative index and text")
+		}
+	case EventRefusalDelta:
+		if e.RefusalDelta == nil || e.RefusalDelta.Index < 0 || strings.TrimSpace(e.RefusalDelta.Text) == "" {
+			return fmt.Errorf("refusal delta requires a non-negative index and text")
 		}
 	case EventToolCallStart:
 		if e.ToolCallStart == nil || e.ToolCallStart.Index < 0 || strings.TrimSpace(e.ToolCallStart.ID) == "" || strings.TrimSpace(e.ToolCallStart.Name) == "" {
@@ -231,7 +247,7 @@ func (v *SequenceValidator) Push(event Event) error {
 		}
 		v.started = true
 	case EventContentBlockStart:
-		if err := v.startBlock(event.ContentBlockStart.Index, ContentText); err != nil {
+		if err := v.startBlock(event.ContentBlockStart.Index, event.ContentBlockStart.Type); err != nil {
 			return err
 		}
 	case EventToolCallStart:
@@ -245,6 +261,10 @@ func (v *SequenceValidator) Push(event Event) error {
 		v.toolArgs[event.ToolCallStart.Index] = &strings.Builder{}
 	case EventTextDelta:
 		if err := v.requireBlock(event.TextDelta.Index, ContentText); err != nil {
+			return err
+		}
+	case EventRefusalDelta:
+		if err := v.requireBlock(event.RefusalDelta.Index, ContentRefusal); err != nil {
 			return err
 		}
 	case EventToolArgumentsDelta:

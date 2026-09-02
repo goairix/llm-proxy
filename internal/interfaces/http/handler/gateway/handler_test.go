@@ -40,6 +40,55 @@ func TestOpenAIHandlerCompletesAndExtractsOnlyBearerKey(t *testing.T) {
 	}
 }
 
+func TestResponsesHandlerCompletesAndExtractsBearerKey(t *testing.T) {
+	stub := &gatewayStub{response: validResponse()}
+	request := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"assistant","input":"hello"}`))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Authorization", "Bearer vk-responses")
+	recorder := httptest.NewRecorder()
+	NewResponses(stub).ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), `"object":"response"`) || stub.virtualKey != "vk-responses" || stub.request.Model != "assistant" {
+		t.Fatalf("status=%d body=%s stub=%+v", recorder.Code, recorder.Body.String(), stub)
+	}
+}
+
+func TestResponsesStreamFlushesBeforeConnectorFinishes(t *testing.T) {
+	release := make(chan struct{})
+	server := httptest.NewServer(NewResponses(&gatewayStub{stream: newBlockingStream(release)}))
+	defer server.Close()
+	request, _ := http.NewRequest(http.MethodPost, server.URL+"/v1/responses", strings.NewReader(`{"model":"assistant","input":"hello","stream":true}`))
+	request.Header.Set("Content-Type", "application/json")
+	response, err := server.Client().Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	first, err := bufio.NewReader(response.Body).ReadString('\n')
+	if err != nil || first != "event: response.created\n" {
+		t.Fatalf("first=%q err=%v", first, err)
+	}
+	close(release)
+}
+
+func TestResponsesClientDisconnectCancelsAndClosesStream(t *testing.T) {
+	stream := newCancelAwareStream()
+	server := httptest.NewServer(NewResponses(&gatewayStub{stream: stream}))
+	defer server.Close()
+	request, _ := http.NewRequest(http.MethodPost, server.URL+"/v1/responses", strings.NewReader(`{"model":"assistant","input":"hello","stream":true}`))
+	request.Header.Set("Content-Type", "application/json")
+	response, err := server.Client().Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reader := bufio.NewReader(response.Body)
+	if first, err := reader.ReadString('\n'); err != nil || first != "event: response.created\n" {
+		t.Fatalf("first=%q err=%v", first, err)
+	}
+	_ = response.Body.Close()
+	waitSignal(t, stream.canceled, "responses stream context cancellation")
+	waitSignal(t, stream.closed, "responses stream close")
+}
+
 func TestAnthropicHandlerPrefersAPIKeyAndFallsBackToBearer(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -160,6 +209,18 @@ func TestStreamingRequiresUnderlyingFlusherAndClosesCreatedStream(t *testing.T) 
 
 	NewOpenAI(stub).ServeHTTP(writer, request)
 
+	if writer.status != http.StatusInternalServerError || !stream.isClosed() || stub.streamCalls != 1 {
+		t.Fatalf("status=%d closed=%v calls=%d body=%s", writer.status, stream.isClosed(), stub.streamCalls, writer.body.String())
+	}
+}
+
+func TestResponsesStreamingRequiresUnderlyingFlusherAndClosesCreatedStream(t *testing.T) {
+	stream := &closeTrackingStream{}
+	stub := &gatewayStub{stream: stream}
+	request := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"assistant","input":"hello","stream":true}`))
+	request.Header.Set("Content-Type", "application/json")
+	writer := &noFlushWriter{header: make(http.Header)}
+	NewResponses(stub).ServeHTTP(writer, request)
 	if writer.status != http.StatusInternalServerError || !stream.isClosed() || stub.streamCalls != 1 {
 		t.Fatalf("status=%d closed=%v calls=%d body=%s", writer.status, stream.isClosed(), stub.streamCalls, writer.body.String())
 	}

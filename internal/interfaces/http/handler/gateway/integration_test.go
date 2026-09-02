@@ -97,7 +97,7 @@ func TestUnifiedGatewaySSEFlushesThroughFullRouter(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			release := make(chan struct{})
 			connector := &blockingConnector{delegate: fakeconnector.New(fakeconnector.Options{}), release: release}
-			gateway := gatewayservice.New(store, integrationRegistry{"fake": connector})
+			gateway := gatewayservice.New(store, integrationRegistry{"fake": connector}, gatewaysnapshot.NewCredentialSelector())
 			root := unifiedGatewayTestRouter(gateway)
 			server := httptest.NewServer(root)
 			defer server.Close()
@@ -135,7 +135,7 @@ func TestConnectorInvocationNeverContainsRawVirtualKey(t *testing.T) {
 	compiledServer, virtualKey, store := newCompiledGatewayServer(t)
 	compiledServer.Close()
 	capture := &capturingConnector{delegate: fakeconnector.New(fakeconnector.Options{}), invocations: make(chan gatewayport.Invocation, 1)}
-	gateway := gatewayservice.New(store, integrationRegistry{"fake": capture})
+	gateway := gatewayservice.New(store, integrationRegistry{"fake": capture}, gatewaysnapshot.NewCredentialSelector())
 	server := httptest.NewServer(gatewayhandler.NewOpenAI(gateway))
 	defer server.Close()
 	response := gatewayRequest(t, server.Client(), server.URL, virtualKey,
@@ -158,7 +158,7 @@ func unifiedGatewayTestRouter(gateway gatewayservice.Gateway) http.Handler {
 		Logger: zap.NewNop(), Instrumenter: integrationInstrumenter{}, Readiness: appRuntime.NewReadiness(),
 		Stats: &dashboard.Stats{}, ObserverFactory: tokenusage.NewObserver,
 		OpenAIProxy: http.NotFoundHandler(), AnthropicProxy: http.NotFoundHandler(),
-		OpenAIGateway: gatewayhandler.NewOpenAI(gateway), AnthropicGateway: gatewayhandler.NewAnthropic(gateway),
+		OpenAIGateway: gatewayhandler.NewOpenAI(gateway), OpenAIResponsesGateway: gatewayhandler.NewResponses(gateway), AnthropicGateway: gatewayhandler.NewAnthropic(gateway),
 	})
 }
 
@@ -185,12 +185,12 @@ func newCompiledGatewayServerWithCapabilities(t *testing.T, capabilities catalog
 	if err != nil {
 		t.Fatal(err)
 	}
-	providerResource, err := catalogmodel.NewProvider("Fake", "fake")
+	providerResource, err := catalogmodel.NewProvider("Fake", catalogmodel.ConnectorFake, "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	deployment, err := catalogmodel.NewDeployment(
-		providerResource.ID, nil, "fake-primary", "fake-model", "fake",
+		providerResource.ID, "fake-primary", "fake-model", catalogmodel.UpstreamFake,
 		catalogmodel.Scope{Kind: catalogmodel.ScopePlatform},
 		capabilities,
 	)
@@ -217,7 +217,7 @@ func newCompiledGatewayServerWithCapabilities(t *testing.T, capabilities catalog
 	}
 	store := gatewaysnapshot.NewStore()
 	store.Publish(compiled)
-	gateway := gatewayservice.New(store, integrationRegistry{"fake": fakeconnector.New(fakeconnector.Options{})})
+	gateway := gatewayservice.New(store, integrationRegistry{"fake": fakeconnector.New(fakeconnector.Options{})}, gatewaysnapshot.NewCredentialSelector())
 	mux := http.NewServeMux()
 	mux.Handle("/v1/chat/completions", gatewayhandler.NewOpenAI(gateway))
 	mux.Handle("/v1/messages", gatewayhandler.NewAnthropic(gateway))
@@ -228,16 +228,23 @@ func TestIntegrationUnifiedGatewayThroughPostgresAndBothProtocols(t *testing.T) 
 	cfg := openGatewayIntegrationConfig(t)
 	logger := zap.NewNop()
 	runtime := provider.NewGatewayRuntime(cfg, logger)
-	controlPlane, err := provider.NewControlPlaneRuntime(cfg, runtime)
+	cipherRuntime, err := provider.NewCredentialCipherRuntime(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
-	dataPlane := provider.NewUnifiedGatewayHandlers(cfg, runtime)
+	controlPlane, err := provider.NewControlPlaneRuntime(cfg, runtime, cipherRuntime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dataPlane, err := provider.NewUnifiedGatewayHandlers(cfg, runtime, cipherRuntime, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
 	root := router.New(router.Config{BaseURL: "http://localhost", Version: "integration"}, router.Dependencies{
 		Logger: logger, Instrumenter: integrationInstrumenter{}, Readiness: appRuntime.NewReadiness(),
 		Stats: &dashboard.Stats{}, ObserverFactory: tokenusage.NewObserver,
 		OpenAIProxy: http.NotFoundHandler(), AnthropicProxy: http.NotFoundHandler(),
-		OpenAIGateway: dataPlane.OpenAI, AnthropicGateway: dataPlane.Anthropic,
+		OpenAIGateway: dataPlane.OpenAIChat, OpenAIResponsesGateway: dataPlane.OpenAIResponses, AnthropicGateway: dataPlane.Anthropic,
 		ControlPlane: controlPlane.Handler, ControlAuth: controlPlane.Authorizer,
 	})
 	server := httptest.NewServer(root)
@@ -689,7 +696,7 @@ func assertStreamErrorUsesProtocolEnvelope(t *testing.T, store *gatewaysnapshot.
 	t.Helper()
 	gateway := gatewayservice.New(store, integrationRegistry{
 		"fake": fakeconnector.New(fakeconnector.Options{StreamErrorAfter: 1, StreamErrorMessage: "safe stream failure"}),
-	})
+	}, gatewaysnapshot.NewCredentialSelector())
 	openAI := httptest.NewServer(gatewayhandler.NewOpenAI(gateway))
 	defer openAI.Close()
 	response := gatewayRequest(t, openAI.Client(), openAI.URL, virtualKey,

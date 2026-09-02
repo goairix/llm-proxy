@@ -2,9 +2,58 @@ package model
 
 import (
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 )
+
+func TestRefusalContentAndDeltaValidate(t *testing.T) {
+	block := ContentBlock{Type: ContentRefusal, Refusal: &RefusalContent{Text: "无法协助"}}
+	if err := block.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	validator := NewSequenceValidator()
+	events := []Event{
+		NewResponseStartAt(uuid.Must(uuid.NewV7()), "assistant", time.Now().UTC()),
+		NewContentBlockStart(0, ContentRefusal),
+		NewRefusalDelta(0, "无法协助"),
+		NewContentBlockStop(0),
+		NewResponseFinish(StopContentFilter),
+	}
+	for _, event := range events {
+		if err := validator.Push(event); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := validator.ValidateEOF(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRefusalDeltaRejectsInvalidBlockAndOrdering(t *testing.T) {
+	id := uuid.Must(uuid.NewV7())
+	tests := []struct {
+		name   string
+		events []Event
+	}{
+		{name: "refusal delta on text block", events: []Event{
+			NewResponseStart(id, "assistant"), NewContentBlockStart(0, ContentText), NewRefusalDelta(0, "拒绝"),
+		}},
+		{name: "empty refusal delta", events: []Event{
+			NewResponseStart(id, "assistant"), NewContentBlockStart(0, ContentRefusal), NewRefusalDelta(0, ""),
+		}},
+		{name: "delta after finish", events: []Event{
+			NewResponseStart(id, "assistant"), NewResponseFinish(StopContentFilter), NewRefusalDelta(0, "拒绝"),
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if err := ValidateEventSequence(test.events); err == nil {
+				t.Fatalf("ValidateEventSequence() = nil for %+v", test.events)
+			}
+		})
+	}
+}
 
 func TestEventSequenceAcceptsTextAndToolCalls(t *testing.T) {
 	events := []Event{

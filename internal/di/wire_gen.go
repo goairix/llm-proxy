@@ -36,8 +36,15 @@ func Initialize(ctx context.Context, cfg *config.Config) (*App, error) {
 		return nil, err
 	}
 	gatewayRuntime := provider.NewGatewayRuntime(cfg, logger)
-	unifiedGatewayHandlers := provider.NewUnifiedGatewayHandlers(cfg, gatewayRuntime)
-	controlPlaneRuntime, err := provider.NewControlPlaneRuntime(cfg, gatewayRuntime)
+	credentialCipherRuntime, err := provider.NewCredentialCipherRuntime(cfg)
+	if err != nil {
+		return nil, err
+	}
+	unifiedGatewayHandlers, err := provider.NewUnifiedGatewayHandlers(cfg, gatewayRuntime, credentialCipherRuntime, runtime)
+	if err != nil {
+		return nil, err
+	}
+	controlPlaneRuntime, err := provider.NewControlPlaneRuntime(cfg, gatewayRuntime, credentialCipherRuntime)
 	if err != nil {
 		return nil, err
 	}

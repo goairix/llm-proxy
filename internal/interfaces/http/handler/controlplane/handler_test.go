@@ -92,7 +92,7 @@ func TestProviderCredentialReadNeverReturnsEnvelope(t *testing.T) {
 		getProviderCredential: func(context.Context, uuid.UUID) (dto.ProviderCredentialResult, error) {
 			return dto.ProviderCredentialResult{
 				ID: credentialID, ProviderID: providerID,
-				Scope: catalogmodel.Scope{Kind: catalogmodel.ScopePlatform}, KeyVersion: "v1",
+				Scope: catalogmodel.Scope{Kind: catalogmodel.ScopePlatform},
 			}, nil
 		},
 	}
@@ -104,10 +104,72 @@ func TestProviderCredentialReadNeverReturnsEnvelope(t *testing.T) {
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("response = %d %s", recorder.Code, recorder.Body.String())
 	}
-	for _, forbidden := range []string{"ciphertext", "wrapped_data_key", "wrapped_key_nonce", "payload_nonce", "credential"} {
+	for _, forbidden := range []string{"ciphertext", "wrapped_data_key", "wrapped_key_nonce", "payload_nonce", "key_version", "credential"} {
 		if strings.Contains(strings.ToLower(recorder.Body.String()), forbidden) {
 			t.Fatalf("response leaked %q: %s", forbidden, recorder.Body.String())
 		}
+	}
+}
+
+func TestProviderHTTPContractOwnsBaseURL(t *testing.T) {
+	provider, _ := catalogmodel.NewProvider("OpenAI", catalogmodel.ConnectorOpenAI, "https://api.openai.com")
+	catalog := &stubCatalog{
+		createProvider: func(_ context.Context, command dto.CreateProvider) (dto.ProviderResult, error) {
+			if command.Name != "OpenAI" || command.ConnectorType != catalogmodel.ConnectorOpenAI || command.BaseURL != "https://api.openai.com/" {
+				t.Fatalf("command=%+v", command)
+			}
+			return dto.ProviderResult{Provider: *provider, Revision: 4}, nil
+		},
+	}
+	handler := middleware.RequestID(New(Dependencies{Tenancy: &stubTenancy{}, Catalog: catalog}))
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/v1/providers", strings.NewReader(`{"name":"OpenAI","connector_type":"openai","base_url":"https://api.openai.com/"}`)))
+
+	if recorder.Code != http.StatusCreated || !strings.Contains(recorder.Body.String(), `"base_url":"https://api.openai.com"`) {
+		t.Fatalf("response=%d %s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestDeploymentHTTPContractRejectsLegacyBindingFields(t *testing.T) {
+	providerID := uuid.Must(uuid.NewV7())
+	for name, field := range map[string]string{
+		"credential": `,"credential_id":"` + uuid.Must(uuid.NewV7()).String() + `"`,
+		"connector":  `,"connector_type":"openai"`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			handler := middleware.RequestID(New(Dependencies{Tenancy: &stubTenancy{}, Catalog: &stubCatalog{}}))
+			body := `{"provider_id":"` + providerID.String() + `","name":"primary","upstream_model":"gpt-5","upstream_protocol":"responses","scope":{"kind":"platform"},"capabilities":{"text":true}` + field + `}`
+			recorder := httptest.NewRecorder()
+			handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/v1/deployments", strings.NewReader(body)))
+			if recorder.Code != http.StatusBadRequest {
+				t.Fatalf("response=%d %s", recorder.Code, recorder.Body.String())
+			}
+		})
+	}
+}
+
+func TestDeploymentHTTPContractUsesUpstreamProtocol(t *testing.T) {
+	providerID := uuid.Must(uuid.NewV7())
+	deployment, _ := catalogmodel.NewDeployment(
+		providerID, "primary", "gpt-5", catalogmodel.UpstreamResponses,
+		catalogmodel.Scope{Kind: catalogmodel.ScopePlatform}, catalogmodel.CapabilitySet{Text: true},
+	)
+	catalog := &stubCatalog{
+		createDeployment: func(_ context.Context, command dto.CreateDeployment) (dto.DeploymentResult, error) {
+			if command.ProviderID != providerID || command.UpstreamProtocol != catalogmodel.UpstreamResponses {
+				t.Fatalf("command=%+v", command)
+			}
+			return dto.DeploymentResult{Deployment: *deployment, Revision: 6}, nil
+		},
+	}
+	handler := middleware.RequestID(New(Dependencies{Tenancy: &stubTenancy{}, Catalog: catalog}))
+	body := `{"provider_id":"` + providerID.String() + `","name":"primary","upstream_model":"gpt-5","upstream_protocol":"responses","scope":{"kind":"platform"},"capabilities":{"text":true}}`
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/v1/deployments", strings.NewReader(body)))
+
+	response := recorder.Body.String()
+	if recorder.Code != http.StatusCreated || !strings.Contains(response, `"upstream_protocol":"responses"`) || strings.Contains(response, "credential_id") || strings.Contains(response, "connector_type") {
+		t.Fatalf("response=%d %s", recorder.Code, response)
 	}
 }
 
@@ -224,7 +286,17 @@ func (s *stubTenancy) GetVirtualKey(ctx context.Context, id uuid.UUID) (dto.Virt
 
 type stubCatalog struct {
 	CatalogService
+	createProvider        func(context.Context, dto.CreateProvider) (dto.ProviderResult, error)
+	createDeployment      func(context.Context, dto.CreateDeployment) (dto.DeploymentResult, error)
 	getProviderCredential func(context.Context, uuid.UUID) (dto.ProviderCredentialResult, error)
+}
+
+func (s *stubCatalog) CreateProvider(ctx context.Context, command dto.CreateProvider) (dto.ProviderResult, error) {
+	return s.createProvider(ctx, command)
+}
+
+func (s *stubCatalog) CreateDeployment(ctx context.Context, command dto.CreateDeployment) (dto.DeploymentResult, error) {
+	return s.createDeployment(ctx, command)
 }
 
 func (s *stubCatalog) GetProviderCredential(ctx context.Context, id uuid.UUID) (dto.ProviderCredentialResult, error) {

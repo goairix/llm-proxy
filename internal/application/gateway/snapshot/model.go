@@ -28,13 +28,29 @@ type CredentialEnvelope struct {
 	Sealed       catalogmodel.SealedCredential
 }
 
-type Deployment struct {
+type Provider struct {
 	ID            uuid.UUID
-	ProviderID    uuid.UUID
 	ConnectorType string
-	UpstreamModel string
-	Capabilities  catalogmodel.CapabilitySet
-	Credential    *CredentialEnvelope
+	BaseURL       string
+}
+
+type CredentialPoolKey struct {
+	ProviderID uuid.UUID
+	ScopeKind  catalogmodel.ScopeKind
+	TargetID   uuid.UUID
+}
+
+type CredentialPool struct {
+	Key         CredentialPoolKey
+	Credentials []CredentialEnvelope
+}
+
+type Deployment struct {
+	ID               uuid.UUID
+	ProviderID       uuid.UUID
+	UpstreamModel    string
+	UpstreamProtocol catalogmodel.UpstreamProtocol
+	Capabilities     catalogmodel.CapabilitySet
 }
 
 type RoutePlan struct {
@@ -48,6 +64,8 @@ type RuntimeSnapshot struct {
 	builtAt     time.Time
 	virtualKeys map[[32]byte]AccessContext
 	routes      map[RouteKey]RoutePlan
+	providers   map[uuid.UUID]Provider
+	credentials map[CredentialPoolKey][]CredentialEnvelope
 	compiled    bool
 }
 
@@ -66,13 +84,7 @@ func (s *RuntimeSnapshot) BuiltAt() time.Time {
 }
 
 func cloneRoutePlan(plan RoutePlan) RoutePlan {
-	result := plan
-	if plan.Deployment.Credential != nil {
-		credential := *plan.Deployment.Credential
-		credential.Sealed = cloneSealedCredential(credential.Sealed)
-		result.Deployment.Credential = &credential
-	}
-	return result
+	return plan
 }
 
 func cloneSealedCredential(sealed catalogmodel.SealedCredential) catalogmodel.SealedCredential {
@@ -83,4 +95,10 @@ func cloneSealedCredential(sealed catalogmodel.SealedCredential) catalogmodel.Se
 		PayloadNonce:    append([]byte(nil), sealed.PayloadNonce...),
 		Ciphertext:      append([]byte(nil), sealed.Ciphertext...),
 	}
+}
+
+func cloneCredentialEnvelope(value CredentialEnvelope) CredentialEnvelope {
+	result := value
+	result.Sealed = cloneSealedCredential(value.Sealed)
+	return result
 }

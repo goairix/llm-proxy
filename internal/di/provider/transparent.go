@@ -59,9 +59,10 @@ func NewRootHandler(
 	if baseURL == "" {
 		baseURL = fmt.Sprintf("http://localhost:%d", cfg.Server.Port)
 	}
-	var openAIGateway, anthropicGateway http.Handler
+	var openAIGateway, openAIResponsesGateway, anthropicGateway http.Handler
 	if gateway != nil {
-		openAIGateway = gateway.OpenAI
+		openAIGateway = gateway.OpenAIChat
+		openAIResponsesGateway = gateway.OpenAIResponses
 		anthropicGateway = gateway.Anthropic
 	}
 	handler := router.New(router.Config{
@@ -70,17 +71,18 @@ func NewRootHandler(
 		RateLimit: toMiddlewareRateLimit(cfg.RateLimit),
 		RateView:  toDashboardRateLimit(cfg.RateLimit),
 	}, router.Dependencies{
-		Logger:           logger,
-		Instrumenter:     telemetry,
-		Readiness:        readiness,
-		Stats:            stats,
-		ObserverFactory:  observers,
-		OpenAIProxy:      openAI.Handler,
-		AnthropicProxy:   anthropic.Handler,
-		OpenAIGateway:    openAIGateway,
-		AnthropicGateway: anthropicGateway,
-		ControlPlane:     controlPlane.Handler,
-		ControlAuth:      controlPlane.Authorizer,
+		Logger:                 logger,
+		Instrumenter:           telemetry,
+		Readiness:              readiness,
+		Stats:                  stats,
+		ObserverFactory:        observers,
+		OpenAIProxy:            openAI.Handler,
+		AnthropicProxy:         anthropic.Handler,
+		OpenAIGateway:          openAIGateway,
+		OpenAIResponsesGateway: openAIResponsesGateway,
+		AnthropicGateway:       anthropicGateway,
+		ControlPlane:           controlPlane.Handler,
+		ControlAuth:            controlPlane.Authorizer,
 	})
 	return RootHandler{Handler: handler}
 }

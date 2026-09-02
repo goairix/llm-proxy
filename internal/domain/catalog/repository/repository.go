@@ -30,7 +30,6 @@ type DeploymentRepository interface {
 	List(context.Context, int, int) ([]model.Deployment, error)
 	ListByProvider(context.Context, uuid.UUID, int, int) ([]model.Deployment, error)
 	HasActiveByProvider(context.Context, uuid.UUID) (bool, error)
-	HasActiveByCredential(context.Context, uuid.UUID) (bool, error)
 }
 
 // ModelAliasRepository persists project-visible model names.
