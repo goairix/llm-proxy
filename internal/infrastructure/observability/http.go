@@ -152,8 +152,20 @@ func (t restoringTransport) RoundTrip(request *http.Request) (*http.Response, er
 	restored.URL = cloneURL(restore.url)
 	restored.Host = restore.host
 	restored.RequestURI = restore.requestURI
-	return t.base.RoundTrip(restored)
+	response, err := t.base.RoundTrip(restored)
+	if err != nil {
+		return nil, &sanitizedTransportError{cause: err}
+	}
+	return response, nil
 }
+
+type sanitizedTransportError struct {
+	cause error
+}
+
+func (*sanitizedTransportError) Error() string { return "upstream transport failed" }
+
+func (e *sanitizedTransportError) Unwrap() error { return e.cause }
 
 type telemetryResponseWriter struct {
 	http.ResponseWriter

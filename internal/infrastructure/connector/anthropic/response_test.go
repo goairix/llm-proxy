@@ -41,6 +41,17 @@ func TestDecodeResponseMapsTextToolUsageAndLogicalIdentity(t *testing.T) {
 	}
 }
 
+func TestDecodeResponseAcceptsPresentZeroUsage(t *testing.T) {
+	body := `{"id":"msg","type":"message","role":"assistant","model":"claude","content":[{"type":"text","text":"hello"}],"stop_reason":"end_turn","usage":{"input_tokens":0,"output_tokens":0}}`
+	response, err := decodeResponse(strings.NewReader(body), fullInvocation(t), fixedIDGenerator, fixedClock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.Usage.InputTokens != 0 || response.Usage.OutputTokens != 0 {
+		t.Fatalf("usage=%+v", response.Usage)
+	}
+}
+
 func TestMapStopReason(t *testing.T) {
 	for _, test := range []struct {
 		value string
@@ -119,6 +130,8 @@ func TestDecodeResponseRejectsInvalidEnvelopeUsageAndTrailingJSON(t *testing.T) 
 		`{"id":"","type":"message","role":"assistant","model":"claude","content":[],"stop_reason":"max_tokens","usage":{"input_tokens":1,"output_tokens":1}}`,
 		`{"id":"msg","type":"message","role":"assistant","model":"","content":[],"stop_reason":"max_tokens","usage":{"input_tokens":1,"output_tokens":1}}`,
 		`{"id":"msg","type":"message","role":"assistant","model":"claude","content":[],"stop_reason":"max_tokens"}`,
+		`{"id":"msg","type":"message","role":"assistant","model":"claude","content":[],"stop_reason":"max_tokens","usage":{"output_tokens":1}}`,
+		`{"id":"msg","type":"message","role":"assistant","model":"claude","content":[],"stop_reason":"max_tokens","usage":{"input_tokens":1}}`,
 		`{"id":"msg","type":"message","role":"assistant","model":"claude","content":[],"stop_reason":"max_tokens","usage":{"input_tokens":-1,"output_tokens":1}}`,
 		`{"id":"msg","type":"message","role":"assistant","model":"claude","content":[],"stop_reason":"max_tokens","usage":{"input_tokens":1,"output_tokens":1}}{}`,
 	} {

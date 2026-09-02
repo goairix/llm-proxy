@@ -2,6 +2,7 @@ package observability
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -110,6 +111,35 @@ func TestTransportForHidesAnthropicBaseURL(t *testing.T) {
 	if !strings.Contains(attributes.String(), "/anthropic/messages") {
 		t.Fatalf("static upstream route missing: %s", attributes.String())
 	}
+}
+
+func TestTransportForHidesAnthropicBaseURLFromFailureSpan(t *testing.T) {
+	runtime, spans, _ := newHTTPTestRuntime(t)
+	privateCause := errors.New("dial tcp private.internal:443: private TLS detail")
+	transport := runtime.TransportFor("anthropic", "messages", roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return nil, privateCause
+	}))
+	request, err := http.NewRequest(http.MethodPost, "https://private.internal/prefix/v1/messages", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := transport.RoundTrip(request); err == nil {
+		t.Fatal("transport failure was not returned")
+	} else if !errors.Is(err, privateCause) {
+		t.Fatalf("transport failure lost its cause: %v", err)
+	}
+
+	var clientSpan sdktrace.ReadOnlySpan
+	for _, span := range spans.Ended() {
+		if span.SpanKind() == trace.SpanKindClient {
+			clientSpan = span
+			break
+		}
+	}
+	if clientSpan == nil {
+		t.Fatalf("client span not found: %d spans", len(spans.Ended()))
+	}
+	assertSpanDoesNotContain(t, clientSpan, "private.internal", "/prefix", "private TLS detail")
 }
 
 func TestNormalizeEndpoint(t *testing.T) {
@@ -380,9 +410,17 @@ func assertSpanDoesNotContain(t *testing.T, span sdktrace.ReadOnlySpan, forbidde
 	t.Helper()
 	var content strings.Builder
 	content.WriteString(span.Name())
+	content.WriteString(span.Status().Description)
 	for _, attr := range span.Attributes() {
 		content.WriteString(string(attr.Key))
 		content.WriteString(attr.Value.Emit())
+	}
+	for _, event := range span.Events() {
+		content.WriteString(event.Name)
+		for _, attr := range event.Attributes {
+			content.WriteString(string(attr.Key))
+			content.WriteString(attr.Value.Emit())
+		}
 	}
 	for _, value := range forbidden {
 		if strings.Contains(content.String(), value) {

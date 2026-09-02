@@ -38,10 +38,10 @@ type responseStopDetails struct {
 }
 
 type responseUsage struct {
-	InputTokens              int64 `json:"input_tokens"`
-	OutputTokens             int64 `json:"output_tokens"`
-	CacheReadInputTokens     int64 `json:"cache_read_input_tokens"`
-	CacheCreationInputTokens int64 `json:"cache_creation_input_tokens"`
+	InputTokens              *int64 `json:"input_tokens"`
+	OutputTokens             *int64 `json:"output_tokens"`
+	CacheReadInputTokens     int64  `json:"cache_read_input_tokens"`
+	CacheCreationInputTokens int64  `json:"cache_creation_input_tokens"`
 }
 
 func decodeResponse(
@@ -67,6 +67,9 @@ func decodeResponse(
 	if source.Usage == nil {
 		return inference.Response{}, invalidResponseError(fmt.Errorf("Anthropic response usage is required"))
 	}
+	if source.Usage.InputTokens == nil || source.Usage.OutputTokens == nil {
+		return inference.Response{}, invalidResponseError(fmt.Errorf("Anthropic response usage is incomplete"))
+	}
 
 	content, err := decodeResponseContent(source.Content)
 	if err != nil {
@@ -88,8 +91,8 @@ func decodeResponse(
 		}
 	}
 	usage := inference.Usage{
-		InputTokens:           source.Usage.InputTokens,
-		OutputTokens:          source.Usage.OutputTokens,
+		InputTokens:           *source.Usage.InputTokens,
+		OutputTokens:          *source.Usage.OutputTokens,
 		CacheReadInputTokens:  source.Usage.CacheReadInputTokens,
 		CacheWriteInputTokens: source.Usage.CacheCreationInputTokens,
 	}
