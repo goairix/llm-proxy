@@ -202,6 +202,24 @@ func TestCreateDeploymentUsesProviderProtocolWithoutFixedCredential(t *testing.T
 	}
 }
 
+func TestCreateAnthropicDeploymentUsesProviderProtocol(t *testing.T) {
+	provider, _ := catalogmodel.NewProvider("Anthropic", catalogmodel.ConnectorAnthropic, "https://api.anthropic.com")
+	service := NewCatalogService(
+		&providerRepo{items: map[uuid.UUID]*catalogmodel.Provider{provider.ID: provider}}, &credentialRepo{},
+		&deploymentRepo{}, &aliasRepo{}, &targetRepo{}, &organizationRepo{}, &projectRepo{},
+		&revisionRepo{}, &testTransactions{}, &recordingCipher{}, nil,
+	)
+	result, err := service.CreateDeployment(context.Background(), dto.CreateDeployment{
+		ProviderID: provider.ID, Name: "claude", UpstreamModel: "claude-sonnet",
+		UpstreamProtocol: catalogmodel.UpstreamAnthropicMessages,
+		Scope:            catalogmodel.Scope{Kind: catalogmodel.ScopePlatform},
+		Capabilities:     catalogmodel.CapabilitySet{Text: true, Streaming: true},
+	})
+	if err != nil || result.Deployment.UpstreamProtocol != catalogmodel.UpstreamAnthropicMessages {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+}
+
 func TestCreateProviderCredentialRejectsFakeProvider(t *testing.T) {
 	provider, _ := catalogmodel.NewProvider("Fake", catalogmodel.ConnectorFake, "")
 	credentials := &credentialRepo{}

@@ -153,6 +153,33 @@ func TestCompilerPublishesRouteWithEmptyCredentialPoolAfterRevocation(t *testing
 	}
 }
 
+func TestCompilerPublishesAnthropicProvider(t *testing.T) {
+	source := validOpenAISourceConfig(t)
+	source.Providers[0].Name = "Anthropic"
+	source.Providers[0].ConnectorType = catalogmodel.ConnectorAnthropic
+	source.Providers[0].BaseURL = "https://api.anthropic.com"
+	source.Deployments[0].UpstreamProtocol = catalogmodel.UpstreamAnthropicMessages
+
+	compiled, err := NewCompiler().Compile(source, fixedNow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	session := Session{snapshot: compiled}
+	access, err := session.Authenticate(snapshotTestVirtualKey, fixedNow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := session.Resolve(access.ProjectID, "assistant")
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider, err := session.Provider(plan.Deployment.ProviderID)
+	if err != nil || provider.ConnectorType != catalogmodel.ConnectorAnthropic ||
+		plan.Deployment.UpstreamProtocol != catalogmodel.UpstreamAnthropicMessages {
+		t.Fatalf("provider=%+v plan=%+v err=%v", provider, plan, err)
+	}
+}
+
 func TestCompilerExcludesCredentialsInDisabledScopes(t *testing.T) {
 	source := validOpenAISourceConfig(t)
 	source.Credentials[0].Status = sharedmodel.StatusDisabled

@@ -104,6 +104,37 @@ func TestProviderNormalizesBaseURLAndSupportsProtocols(t *testing.T) {
 	}
 }
 
+func TestAnthropicProviderSupportsMessagesOnly(t *testing.T) {
+	provider, err := NewProvider("Anthropic", ConnectorAnthropic, "https://api.anthropic.com/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if provider.BaseURL != "https://api.anthropic.com" {
+		t.Fatalf("BaseURL=%q", provider.BaseURL)
+	}
+	if !provider.Supports(UpstreamAnthropicMessages) || provider.Supports(UpstreamResponses) ||
+		provider.Supports(UpstreamChatCompletions) || provider.Supports(UpstreamFake) {
+		t.Fatal("unexpected Anthropic protocol matrix")
+	}
+}
+
+func TestAnthropicDeploymentUsesMessagesProtocol(t *testing.T) {
+	provider, err := NewProvider("Anthropic", ConnectorAnthropic, "https://api.anthropic.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployment, err := NewDeployment(
+		provider.ID, "claude", "claude-sonnet", UpstreamAnthropicMessages,
+		Scope{Kind: ScopePlatform}, CapabilitySet{Text: true, Streaming: true},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if deployment.UpstreamProtocol != UpstreamAnthropicMessages || !provider.Supports(deployment.UpstreamProtocol) {
+		t.Fatalf("deployment=%+v", deployment)
+	}
+}
+
 func TestProviderRejectsUnsafeBaseURL(t *testing.T) {
 	for _, value := range []string{
 		"",

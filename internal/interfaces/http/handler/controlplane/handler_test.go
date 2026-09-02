@@ -130,6 +130,27 @@ func TestProviderHTTPContractOwnsBaseURL(t *testing.T) {
 	}
 }
 
+func TestAnthropicProviderHTTPContract(t *testing.T) {
+	provider, _ := catalogmodel.NewProvider("Anthropic", catalogmodel.ConnectorAnthropic, "https://api.anthropic.com")
+	catalog := &stubCatalog{
+		createProvider: func(_ context.Context, command dto.CreateProvider) (dto.ProviderResult, error) {
+			if command.ConnectorType != catalogmodel.ConnectorAnthropic || command.BaseURL != "https://api.anthropic.com/" {
+				t.Fatalf("command=%+v", command)
+			}
+			return dto.ProviderResult{Provider: *provider, Revision: 5}, nil
+		},
+	}
+	handler := middleware.RequestID(New(Dependencies{Tenancy: &stubTenancy{}, Catalog: catalog}))
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/v1/providers", strings.NewReader(`{"name":"Anthropic","connector_type":"anthropic","base_url":"https://api.anthropic.com/"}`)))
+
+	response := recorder.Body.String()
+	if recorder.Code != http.StatusCreated || !strings.Contains(response, `"connector_type":"anthropic"`) ||
+		!strings.Contains(response, `"base_url":"https://api.anthropic.com"`) {
+		t.Fatalf("response=%d %s", recorder.Code, response)
+	}
+}
+
 func TestDeploymentHTTPContractRejectsLegacyBindingFields(t *testing.T) {
 	providerID := uuid.Must(uuid.NewV7())
 	for name, field := range map[string]string{
@@ -169,6 +190,30 @@ func TestDeploymentHTTPContractUsesUpstreamProtocol(t *testing.T) {
 
 	response := recorder.Body.String()
 	if recorder.Code != http.StatusCreated || !strings.Contains(response, `"upstream_protocol":"responses"`) || strings.Contains(response, "credential_id") || strings.Contains(response, "connector_type") {
+		t.Fatalf("response=%d %s", recorder.Code, response)
+	}
+}
+
+func TestAnthropicDeploymentHTTPContract(t *testing.T) {
+	providerID := uuid.Must(uuid.NewV7())
+	deployment, _ := catalogmodel.NewDeployment(
+		providerID, "claude", "claude-sonnet", catalogmodel.UpstreamAnthropicMessages,
+		catalogmodel.Scope{Kind: catalogmodel.ScopePlatform}, catalogmodel.CapabilitySet{Text: true},
+	)
+	catalog := &stubCatalog{
+		createDeployment: func(_ context.Context, command dto.CreateDeployment) (dto.DeploymentResult, error) {
+			if command.ProviderID != providerID || command.UpstreamProtocol != catalogmodel.UpstreamAnthropicMessages {
+				t.Fatalf("command=%+v", command)
+			}
+			return dto.DeploymentResult{Deployment: *deployment, Revision: 7}, nil
+		},
+	}
+	handler := middleware.RequestID(New(Dependencies{Tenancy: &stubTenancy{}, Catalog: catalog}))
+	body := `{"provider_id":"` + providerID.String() + `","name":"claude","upstream_model":"claude-sonnet","upstream_protocol":"anthropic_messages","scope":{"kind":"platform"},"capabilities":{"text":true}}`
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/v1/deployments", strings.NewReader(body)))
+
+	if response := recorder.Body.String(); recorder.Code != http.StatusCreated || !strings.Contains(response, `"upstream_protocol":"anthropic_messages"`) {
 		t.Fatalf("response=%d %s", recorder.Code, response)
 	}
 }

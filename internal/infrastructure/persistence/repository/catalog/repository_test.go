@@ -50,31 +50,43 @@ func TestCredentialMapperPreservesEncryptedBytes(t *testing.T) {
 
 func TestProviderAndDeploymentMappersPreserveConnectorConfiguration(t *testing.T) {
 	capabilities := catalogmodel.CapabilitySet{Text: true, Tools: true, Streaming: true}
-	provider, err := catalogmodel.NewProvider("OpenAI", catalogmodel.ConnectorOpenAI, "https://api.openai.com/")
-	if err != nil {
-		t.Fatal(err)
-	}
-	mappedProvider, err := providerToDomain(providerToEntity(provider))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if mappedProvider.BaseURL != "https://api.openai.com" || mappedProvider.ConnectorType != catalogmodel.ConnectorOpenAI {
-		t.Fatalf("provider = %+v", mappedProvider)
-	}
-	deployment, err := catalogmodel.NewDeployment(provider.ID, "responses", "gpt-5", catalogmodel.UpstreamResponses, catalogmodel.Scope{Kind: catalogmodel.ScopePlatform}, capabilities)
-	if err != nil {
-		t.Fatal(err)
-	}
-	record, err := deploymentToEntity(deployment)
-	if err != nil {
-		t.Fatal(err)
-	}
-	got, err := deploymentToDomain(record)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got.Capabilities != capabilities || got.UpstreamProtocol != catalogmodel.UpstreamResponses || got.ProviderID != provider.ID {
-		t.Fatalf("deployment = %+v", got)
+	for _, test := range []struct {
+		name          string
+		connectorType string
+		baseURL       string
+		protocol      catalogmodel.UpstreamProtocol
+	}{
+		{name: "openai", connectorType: catalogmodel.ConnectorOpenAI, baseURL: "https://api.openai.com/", protocol: catalogmodel.UpstreamResponses},
+		{name: "anthropic", connectorType: catalogmodel.ConnectorAnthropic, baseURL: "https://api.anthropic.com/", protocol: catalogmodel.UpstreamAnthropicMessages},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			provider, err := catalogmodel.NewProvider(test.name, test.connectorType, test.baseURL)
+			if err != nil {
+				t.Fatal(err)
+			}
+			mappedProvider, err := providerToDomain(providerToEntity(provider))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if mappedProvider.BaseURL != strings.TrimSuffix(test.baseURL, "/") || mappedProvider.ConnectorType != test.connectorType {
+				t.Fatalf("provider = %+v", mappedProvider)
+			}
+			deployment, err := catalogmodel.NewDeployment(provider.ID, test.name, "upstream-model", test.protocol, catalogmodel.Scope{Kind: catalogmodel.ScopePlatform}, capabilities)
+			if err != nil {
+				t.Fatal(err)
+			}
+			record, err := deploymentToEntity(deployment)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, err := deploymentToDomain(record)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.Capabilities != capabilities || got.UpstreamProtocol != test.protocol || got.ProviderID != provider.ID {
+				t.Fatalf("deployment = %+v", got)
+			}
+		})
 	}
 }
 

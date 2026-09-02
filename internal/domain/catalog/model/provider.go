@@ -13,6 +13,7 @@ const (
 	ConnectorFake             = "fake"
 	ConnectorOpenAI           = "openai"
 	ConnectorOpenAICompatible = "openai_compatible"
+	ConnectorAnthropic        = "anthropic"
 )
 
 // Provider describes a non-sensitive model-vendor integration.
@@ -63,7 +64,7 @@ func (p Provider) Validate() error {
 		if strings.TrimSpace(p.BaseURL) != "" {
 			return fmt.Errorf("%w: fake provider base URL must be empty", sharederrors.ErrInvalid)
 		}
-	case ConnectorOpenAI, ConnectorOpenAICompatible:
+	case ConnectorOpenAI, ConnectorOpenAICompatible, ConnectorAnthropic:
 		normalized, err := normalizeBaseURL(p.ConnectorType, p.BaseURL)
 		if err != nil {
 			return err
@@ -87,6 +88,8 @@ func (p Provider) Supports(protocol UpstreamProtocol) bool {
 		return protocol == UpstreamFake
 	case ConnectorOpenAI, ConnectorOpenAICompatible:
 		return protocol == UpstreamResponses || protocol == UpstreamChatCompletions
+	case ConnectorAnthropic:
+		return protocol == UpstreamAnthropicMessages
 	default:
 		return false
 	}
